@@ -14,7 +14,7 @@ This Actor puts the open-source **RocketRide meta-harness** on Apify as an alway
 | Ready-made pipeline | What you get | LLM key needed |
 | --- | --- | --- |
 | 📄 `doc-to-text` | Clean text from PDF, DOCX, PPTX, XLSX, HTML and images, with OCR | No |
-| 🛡️ `redact-pii` | The same text with names, emails, phones and places masked | No |
+| 🛡️ `redact-pii` | The same text with detected names, organizations, places and other personal details masked | No |
 | 📝 `summarize` | Summary, key points and named entities | Yes |
 | 🧾 `extract-data` | The fields you name, returned as JSON rows | Yes |
 | ❓ `ask` | An answer to your question, grounded in the document | Yes |
@@ -211,6 +211,7 @@ Each server is single-tenant. Your files, pipelines and keys stay inside your ow
 ### Known limitations
 
 - The server runs on CPU. Nodes that need a GPU will be slow or will not work here.
+- PII detection is model-based. It reliably masked names, organizations and places in our tests, but it can miss items such as the domain of an email address. Review the output before relying on it for compliance.
 - The MCP `send_files` tool and upload links read from the Actor's container, not your machine. To send your own files, use `send_data`, a pipeline endpoint, or `/run` with a URL.
 - Running pipelines live in the server's memory, so a server restart clears them. Save results with `?save=true`.
 - Nodes outside the ready-made pipelines install their dependencies the first time they are used, which makes that first run slower.
