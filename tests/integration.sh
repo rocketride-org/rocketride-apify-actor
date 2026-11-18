@@ -22,5 +22,18 @@ curl -fsS -X POST $B/mcp -H 'Content-Type: application/json' -H 'Accept: applica
 grep -q '"result"' /tmp/init.txt
 echo "== MCP tools/list"
 curl -fsS -X POST $B/mcp -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | head -c 1500; echo
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' > /tmp/tools.txt
+python3 - <<'PY'
+import json,re
+raw=open('/tmp/tools.txt').read()
+m=re.search(r'\{.*\}', raw, re.S); tools=[t['name'] for t in json.loads(m.group(0))['result']['tools']]
+print(len(tools), 'MCP tools:', ', '.join(tools)); assert 'validate_pipeline' in tools
+PY
+python3 - <<'PY'
+import json
+for f in ('/tmp/d2t.json','/tmp/pii.json'):
+    d=json.load(open(f)); print(d['pipeline'], 'first-call ms:', d['durationMs'])
+pii=json.load(open('/tmp/pii.json'))['text']
+assert 'John Smith' not in pii and 'example.com' not in pii, pii
+PY
 echo "INTEGRATION PASSED"

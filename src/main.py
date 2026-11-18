@@ -144,7 +144,8 @@ async def wait_engine_ready(timeout: float = 300) -> None:
                 r = await c.get('/version')
                 if r.status_code == 200:
                     try:
-                        S.engine_version = r.json()
+                        v = r.json()
+                        S.engine_version = v.get('data', v) if isinstance(v, dict) else v
                     except ValueError:
                         S.engine_version = r.text.strip()
                     S.engine_ready.set()
@@ -252,7 +253,7 @@ def extract_text(result: Any) -> str | None:
 
     objects = result.get('objects') if isinstance(result, dict) else None
     walk(objects if objects is not None else result)
-    return '\n'.join(texts) if texts else None
+    return '\n'.join(t.strip('\n') for t in texts).strip() if texts else None
 
 
 async def read_payload(request: Request) -> tuple[bytes, str, str | None]:
@@ -482,6 +483,47 @@ async def self_test() -> int:
     return 0
 
 
+def sample_png() -> bytes | None:
+    """A small image with text, to pull OCR models at build time. Best effort."""
+    try:
+        import io
+
+        from PIL import Image, ImageDraw
+
+        img = Image.new('RGB', (640, 160), 'white')
+        ImageDraw.Draw(img).text((20, 60), 'RocketRide on Apify OCR warm-up 12345', fill='black')
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        return buf.getvalue()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def prebake() -> int:
+    """Docker build step: run each featured pipeline once so node dependencies and
+    models are installed into the image instead of on a user's first request."""
+    samples: list[tuple[bytes, str, str]] = [
+        (b'Contact John Smith at john.smith@example.com in Seattle.', 'text/plain', 'warmup.txt')
+    ]
+    png = sample_png()
+    if png:
+        samples.append((png, 'image/png', 'warmup.png'))
+    for name in FEATURED:
+        for body, ctype, filename in samples:
+            for attempt in range(3):
+                try:
+                    token = await warm_token(name, refresh=attempt > 0)
+                    started = time.time()
+                    await send_to_task(token, body, ctype, filename)
+                    log.info('Prebaked %s with %s in %.1fs', name, filename, time.time() - started)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    log.warning('Prebake %s/%s attempt %d failed: %s', name, filename, attempt + 1, e)
+    for token in list(S.warm_tokens.values()):
+        await stop_task(token)
+    return 0
+
+
 async def main() -> int:
     actor_input = apify_env.load_input()
     load_pipelines()
@@ -494,9 +536,9 @@ async def main() -> int:
     await start_engine(actor_input)
     engine_watch: asyncio.Task | None = None
 
-    if mode == 'selftest':
+    if mode in ('selftest', 'prebake'):
         await wait_engine_ready()
-        code = await self_test()
+        code = await (prebake() if mode == 'prebake' else self_test())
         if S.engine_proc and S.engine_proc.returncode is None:
             S.engine_proc.terminate()
         return code
@@ -513,10 +555,12 @@ async def main() -> int:
         engine_watch = asyncio.create_task(watch_engine())
         if actor_input.get('warmFeaturedPipelines', True):
             for name in FEATURED:
-                try:
-                    await warm_token(name)
-                except Exception as e:  # noqa: BLE001
-                    log.warning('Could not pre-warm %s: %s', name, e)
+                for attempt in range(2):
+                    try:
+                        await warm_token(name)
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        log.warning('Could not pre-warm %s (attempt %d): %s', name, attempt + 1, e)
 
     asyncio.create_task(boot())
     loop = asyncio.get_running_loop()
