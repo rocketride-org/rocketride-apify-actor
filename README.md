@@ -1,43 +1,78 @@
+<p align="center">
+  <a href="https://rocketride.org"><img src="https://raw.githubusercontent.com/rocketride-org/rocketride-apify-actor/main/assets/rocketride-ai-meta-harness.jpg" alt="RocketRide, the open-source AI meta-harness" width="100%"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/rocketride-org/rocketride-apify-actor/actions/workflows/ci.yml"><img src="https://github.com/rocketride-org/rocketride-apify-actor/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
+  <a href="https://docs.rocketride.org/"><img src="https://img.shields.io/badge/docs-docs.rocketride.org-orange" alt="Docs"></a>
+  <a href="https://discord.gg/PMXrtenMsY"><img src="https://img.shields.io/badge/Discord-Join_the_community-5865F2?logo=discord&logoColor=white" alt="RocketRide Discord"></a>
+</p>
+
 # RocketRide - Meta harness
 
-RocketRide is an AI Meta Harness - backed by a strong C++ engine runtime - that can help you build your agents and applications. Our goal is to help solopreneurs and pro developers out there to provide an end to end AI harness to make their ideas a reality. They do the building. We take care of everything right from auth to billing.
+**Give your AI agent a private RocketRide engine on Apify: an MCP server to build and run AI pipelines, and six ready-made document and agent endpoints.**
 
-<a href="https://rocketride.org"><img src="https://raw.githubusercontent.com/rocketride-org/rocketride-apify-actor/main/assets/rocketride-ai-meta-harness.jpg" alt="RocketRide, the open source AI meta-harness" width="100%"></a>
+This Actor runs the open-source [RocketRide](https://github.com/rocketride-org/rocketride-server) engine in Apify **Standby (Server) mode**. It stays warm between requests and exposes one URL:
 
-This Actor puts the open-source **RocketRide meta-harness** on Apify as an always-warm **MCP server** and **HTTP API**. One endpoint gives your AI agent (Claude, Cursor, ChatGPT, n8n, LangChain or your own code) two things:
+```
+https://rocketrideai--rocketride.apify.actor
+```
 
-- **A harness to build with.** 33 MCP tools to discover about 150 nodes, then compose, validate, run and trace **AI pipelines and agents** on RocketRide's C++ engine.
-- **Pipelines that already work.** Six ready-made endpoints for documents and agents: **extract text**, **redact PII**, **summarize**, **extract structured data**, **ask a document**, and a **research agent**.
+Point Claude, Cursor, ChatGPT, n8n, LangChain or your own code at it and you get:
 
-## What can RocketRide - Meta harness do?
+- **An MCP server** (`/mcp`) with 33 tools to discover about 150 nodes, then compose, validate, run and trace AI pipelines on RocketRide's C++ engine.
+- **Ready-made pipelines** (`/pipelines/{name}`) you call with one HTTP request: extract text, redact PII, summarize, extract structured data, ask a document, and a research agent.
 
-| Ready-made pipeline | What you get | LLM key needed |
-| --- | --- | --- |
-| 📄 `doc-to-text` | Clean text from PDF, DOCX, PPTX, XLSX, HTML and images, with OCR | No |
-| 🛡️ `redact-pii` | The same text with detected names, organizations, places and other personal details masked | No |
-| 📝 `summarize` | Summary, key points and named entities | Yes |
-| 🧾 `extract-data` | The fields you name, returned as JSON rows | Yes |
-| ❓ `ask` | An answer to your question, grounded in the document | Yes |
-| 🤖 `agent` | A RocketRide agent that plans, fetches web pages and APIs, and answers | Yes |
+## Contents
 
-And through the **MCP server**, your agent can build anything else:
+- [Ready-made pipelines](#ready-made-pipelines)
+- [Quickstart](#quickstart)
+- [Connect your agent over MCP](#connect-your-agent-over-mcp)
+- [Call a pipeline over HTTP](#call-a-pipeline-over-http)
+- [API reference](#api-reference)
+- [Input: bring your own model](#input-bring-your-own-model)
+- [Pricing and performance](#pricing-and-performance)
+- [FAQ](#faq)
+- [Development](#development)
+- [Support](#support)
 
-- 🧩 **About 150 nodes.** LLMs (OpenAI, Anthropic, Gemini, Mistral, Bedrock, Ollama and more), agents (RocketRide, LangChain, CrewAI, LlamaIndex), vector, graph and SQL stores, OCR, NER, chunking, embeddings, and tools such as HTTP, Python, GitHub, Slack, Notion and Apify.
-- ✅ **Validated before it runs.** The engine checks every pipeline against its own rules, so agents get precise errors instead of silent failures.
-- 🔍 **Traceable.** Watch running pipelines and read back what each step did.
-- ⚡ **Warm, not cold.** The Actor runs in Apify **Standby (Server) mode**. The engine and your pipelines stay loaded between requests.
-- 🔑 **Bring your own model.** OpenAI, Anthropic, Gemini or any OpenAI-compatible endpoint (OpenRouter, Groq, Together, Ollama). Keys are encrypted and stay inside your own run.
+## Ready-made pipelines
 
-<a href="https://docs.rocketride.org/"><img src="https://raw.githubusercontent.com/rocketride-org/rocketride-apify-actor/main/assets/rocketride-visual-pipeline-builder.jpg" alt="A RocketRide AI pipeline in the visual builder" width="100%"></a>
+| Pipeline | What you get | LLM key |
+| --- | --- | :---: |
+| 📄 `doc-to-text` | Clean text from PDF, DOCX, PPTX, XLSX, HTML and images, with OCR | Not needed |
+| 🛡️ `redact-pii` | The same text with names, organizations, places and other personal details masked | Not needed |
+| 📝 `summarize` | A summary, key points and named entities | Required |
+| 🧾 `extract-data` | The fields you name, returned as JSON rows | Required |
+| ❓ `ask` | An answer to your question, grounded in the document | Required |
+| 🤖 `agent` | A RocketRide agent that plans, fetches web pages and APIs, and answers | Required |
 
-## How to use RocketRide on Apify
+Need something else? Your agent can build it through the MCP server from about 150 nodes:
 
-1. Open the Actor in Apify Console. To use the LLM pipelines, add one provider key in the **Input** tab.
-2. Copy your **Apify API token** from [Settings → API & Integrations](https://console.apify.com/settings/integrations).
-3. Send requests to the server URL: `https://rocketrideai--rocketride.apify.actor`. The first request starts your server; later requests hit the warm engine.
-4. Point your agent at `/mcp`, or call the pipeline endpoints below.
+- **LLMs:** OpenAI, Anthropic, Gemini, Mistral, Bedrock, Ollama and more
+- **Agent frameworks:** RocketRide, LangChain, CrewAI, LlamaIndex
+- **Data:** vector, graph and SQL stores, embeddings, chunking
+- **Documents:** OCR, NER, parsing
+- **Tools:** HTTP, Python, GitHub, Slack, Notion, Apify
 
-Every request needs the header `Authorization: Bearer <APIFY_TOKEN>`.
+The engine validates every pipeline before it runs, so your agent gets precise errors instead of silent failures, and you can trace what each step did.
+
+## Quickstart
+
+1. **Get your token.** Copy your Apify API token from [Settings → API & Integrations](https://console.apify.com/settings/integrations).
+2. **Add an LLM key (optional).** Only the LLM pipelines need one. Add it in the Actor's **Input** tab.
+3. **Send a request.** Every request needs `Authorization: Bearer <APIFY_TOKEN>`. The first one starts your server; later ones hit the warm engine.
+
+```bash
+curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/redact-pii" \
+  -H "Authorization: Bearer $APIFY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"text": "Contact John Smith at john.smith@example.com in Seattle."}'
+```
+
+```json
+{ "pipeline": "redact-pii", "text": "Contact ██████████ at ██████████@███████████ in ███████." }
+```
 
 ## Connect your agent over MCP
 
@@ -65,13 +100,19 @@ Then ask your agent something like:
 
 > Use RocketRide to build a pipeline that takes a PDF invoice, extracts the vendor, total and due date with GPT-4o mini, and returns JSON. Validate it, then run it on this file.
 
-The MCP tools cover the whole loop: `list_components`, `describe_component`, `validate_pipeline`, `run_pipeline`, `send_data`, `monitor`, `terminate` and more. See the [tool reference](https://docs.rocketride.org/connect/mcp/http/tools).
+The tools cover the whole loop: `list_components`, `describe_component`, `validate_pipeline`, `run_pipeline`, `send_data`, `monitor`, `terminate` and more. See the [MCP tool reference](https://docs.rocketride.org/connect/mcp/http/tools).
 
-## Pipeline API examples
+## Call a pipeline over HTTP
 
-Send a document as **JSON** (`{"text": "..."}` or `{"url": "https://..."}`), as **raw bytes** with a `Content-Type`, or as **multipart/form-data**. With raw or multipart uploads, pass options in the query string. Add `?save=true` to also store the result in the run's dataset.
+Send a document in any of three ways:
 
-### Summarize a PDF
+- **JSON:** `{"text": "..."}` or `{"url": "https://..."}`, with options in the body
+- **Raw bytes:** the file as the body with its `Content-Type`, options in the query string
+- **Multipart:** `multipart/form-data`, options in the query string
+
+Add `?save=true` to also store the result in the run's dataset.
+
+**Summarize a PDF**
 
 ```bash
 curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/summarize" \
@@ -79,17 +120,15 @@ curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/summarize" 
   -d '{"url": "https://arxiv.org/pdf/1706.03762", "summaryWords": 150}'
 ```
 
-The `text` field comes back with a summary paragraph, a `Key Points:` list and an `Entities:` list.
+The `text` field holds a summary paragraph, a `Key Points:` list and an `Entities:` list.
 
-### Extract structured data from an invoice
+**Extract structured data from an invoice**
 
 ```bash
 curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/extract-data?fields=invoice_number,total,due_date" \
   -H "Authorization: Bearer $APIFY_TOKEN" -H "Content-Type: application/pdf" \
   --data-binary @invoice.pdf
 ```
-
-Example output:
 
 ```json
 {
@@ -100,9 +139,9 @@ Example output:
 }
 ```
 
-For typed columns, send JSON instead: `"fields": [{"name": "total", "type": "decimal"}, {"name": "due_date", "type": "date"}]`.
+For typed columns, send JSON: `"fields": [{"name": "total", "type": "decimal"}, {"name": "due_date", "type": "date"}]`.
 
-### Ask a question about a document
+**Ask a question about a document**
 
 ```bash
 curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/ask" \
@@ -112,7 +151,7 @@ curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/ask" \
 
 The answer is in the `answer` field.
 
-### Run the research agent
+**Run the research agent**
 
 ```bash
 curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/agent" \
@@ -120,19 +159,9 @@ curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/agent" \
   -d '{"question": "What changed in the latest Python release? Check python.org and cite the page."}'
 ```
 
-### Redact personal data (no key needed)
+## API reference
 
-```bash
-curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/redact-pii" \
-  -H "Authorization: Bearer $APIFY_TOKEN" -H "Content-Type: application/json" \
-  -d '{"text": "Contact John Smith at john.smith@example.com in Seattle."}'
-```
-
-```json
-{ "pipeline": "redact-pii", "text": "Contact ██████████ at ██████████@███████████ in ███████." }
-```
-
-### All endpoints
+### Endpoints
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -149,8 +178,8 @@ curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/redact-pii"
 | Option | Pipelines | Meaning |
 | --- | --- | --- |
 | `provider` | LLM pipelines | `openai`, `anthropic`, `gemini` or `openai-compatible`. Default: the first one you configured |
-| `model` | LLM pipelines | Model id at that provider, e.g. `gpt-4o-mini`. Default: the node's default model |
-| `ocr` | summarize, extract-data, ask | `true` to OCR scanned pages and images. Default `false` |
+| `model` | LLM pipelines | Model id at that provider, such as `gpt-4o-mini`. Default: the node's default model |
+| `ocr` | summarize, extract-data, ask | `true` to OCR scanned pages and images. Default: `false` |
 | `question` | ask, agent | Required |
 | `fields` | extract-data | Required. Column names, or objects with `name`, `type`, `default` |
 | `summaryWords`, `keyPoints`, `entities`, `chunks` | summarize | Length and sections of the summary |
@@ -158,33 +187,29 @@ curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/redact-pii"
 
 ## Input: bring your own model
 
-All input is optional. The document pipelines and the MCP tools for building and validating pipelines work with no keys at all.
+All input is optional. The document pipelines, and the MCP tools for building and validating pipelines, work with no keys.
 
 | Input field | Pipelines see it as |
 | --- | --- |
 | OpenAI API key | `${ROCKETRIDE_OPENAI_KEY}` |
 | Anthropic API key | `${ROCKETRIDE_ANTHROPIC_KEY}` |
 | Google Gemini API key | `${ROCKETRIDE_GEMINI_KEY}` |
-| OpenAI-compatible endpoint URL, model and key | `${ROCKETRIDE_LLM_BASE_URL}`, `${ROCKETRIDE_LLM_MODEL}`, `${ROCKETRIDE_LLM_KEY}` |
+| OpenAI-compatible endpoint URL, model and key (OpenRouter, Groq, Together, Ollama) | `${ROCKETRIDE_LLM_BASE_URL}`, `${ROCKETRIDE_LLM_MODEL}`, `${ROCKETRIDE_LLM_KEY}` |
 | Default model | Used when a request names no `model` |
 | Other node credentials (JSON) | Any `ROCKETRIDE_*` name, for vector stores, search, GitHub and more |
 
 Secret fields are encrypted by Apify and decrypted only inside your run. Pipelines refer to keys by variable name, so a key never appears in a pipeline definition.
 
-## How much does it cost to use RocketRide on Apify?
+## Pricing and performance
 
-The Actor is **free**. You pay for **Apify platform usage** while your server runs, plus whatever your own LLM provider charges.
+The Actor is **free**. You pay Apify for platform usage while your server runs, and your LLM provider for model calls. Apify's free plan credits are enough to try every pipeline.
 
-- Each user gets a **private server** in their own Apify account (single-tenant).
-- The server starts on the first request and stops after the idle timeout you set in **Settings → Server**.
-- **4 GB of memory** is the minimum and the recommended setting. With all six pipelines loaded, the server used about 3 GB in our tests.
-- Apify's free plan credits are enough to try every pipeline.
-
-## Performance
-
-- **Warm requests are fast.** Once a pipeline is running, a short text document takes a fraction of a second, plus LLM time. OCR and entity detection take longer.
-- **A new pipeline takes a few seconds to start.** LLM pipelines are built from your options. The three most recent stay running, so repeating a request with the same options skips the start.
-- **The first start on a new machine is the slow one.** Apify has to download the image (the engine plus OCR and entity models) before the server can boot. That can take a few minutes; after that the server boots in seconds.
+- **Private server.** Each user gets a single-tenant server in their own Apify account.
+- **Starts on demand.** The server starts on the first request and stops after the idle timeout you set in **Settings → Server**.
+- **4 GB of memory.** This is the minimum and the recommended setting. With all six pipelines loaded, the server used about 3 GB in our tests.
+- **Warm requests are fast.** A short text document takes a fraction of a second, plus LLM time. OCR and entity detection take longer.
+- **New pipelines take a few seconds to start.** LLM pipelines are built from your options. The three most recent stay running, so repeating a request with the same options skips the start.
+- **The first start on a new machine is slow.** Apify downloads the image (engine plus OCR and entity models) once, which can take a few minutes. After that the server boots in seconds.
 
 ## FAQ
 
@@ -192,37 +217,62 @@ The Actor is **free**. You pay for **Apify platform usage** while your server ru
 
 An agent harness runs one agent. A meta-harness runs the whole stack around it: models, tools, memory, data stores, document processing and other agent frameworks, wired together as a pipeline you can validate, observe and deploy. RocketRide runs those pipelines on a multithreaded C++ engine.
 
-### Is RocketRide open source?
-
-Yes. The engine is [MIT-licensed on GitHub](https://github.com/rocketride-org/rocketride-server). This Actor's source, including every ready-made pipeline as a `.pipe` file, is in [rocketride-org/rocketride-apify-actor](https://github.com/rocketride-org/rocketride-apify-actor).
-
 ### Can I edit the ready-made pipelines?
 
-Yes. `GET /pipelines/{name}` returns the pipeline definition. Open it in the [RocketRide VS Code extension](https://marketplace.visualstudio.com/items?itemName=RocketRide.rocketride) to edit it on a visual canvas, then run your version through `/run` or the MCP `run_pipeline` tool.
+Yes. `GET /pipelines/{name}` returns the definition, and every one is also in [`pipelines/`](https://github.com/rocketride-org/rocketride-apify-actor/tree/main/pipelines) as a `.pipe` file. Open it in the [RocketRide VS Code extension](https://marketplace.visualstudio.com/items?itemName=RocketRide.rocketride) to edit it on a visual canvas, then run your version through `/run` or the MCP `run_pipeline` tool.
 
-### How is this different from RocketRide Cloud?
-
-[RocketRide Cloud](https://rocketride.org) is the managed service with team features and deployments. This Actor gives you a private engine inside your Apify account, billed through Apify. It suits agents and automations that already live on Apify.
+<a href="https://docs.rocketride.org/"><img src="https://raw.githubusercontent.com/rocketride-org/rocketride-apify-actor/main/assets/rocketride-visual-pipeline-builder.jpg" alt="A RocketRide AI pipeline in the visual builder" width="100%"></a>
 
 ### Is my data private?
 
 Each server is single-tenant. Your files, pipelines and keys stay inside your own Actor run, and only requests carrying a token for your Apify account reach it.
 
-### Known limitations
+### How is this different from RocketRide Cloud?
 
-- The server runs on CPU. Nodes that need a GPU will be slow or will not work here.
-- PII detection is model-based. It reliably masked names, organizations and places in our tests, but it can miss items such as the domain of an email address. Review the output before relying on it for compliance.
-- The MCP `send_files` tool and upload links read from the Actor's container, not your machine. To send your own files, use `send_data`, a pipeline endpoint, or `/run` with a URL.
-- Running pipelines live in the server's memory, so a server restart clears them. Save results with `?save=true`.
-- Nodes outside the ready-made pipelines install their dependencies the first time they are used, which makes that first run slower.
+[RocketRide Cloud](https://cloud.rocketride.ai/) is RocketRide's hosted runtime. This Actor gives you a private engine inside your Apify account, billed through Apify. It suits agents and automations that already live on Apify.
 
 ### Can I call this from n8n, Make or Zapier?
 
-Yes. Use an HTTP request step with your Apify token. RocketRide also ships an n8n community node.
+Yes. Use an HTTP request step with your Apify token in the `Authorization` header. Going the other way, a pipeline can trigger an n8n workflow with the `tool_n8n` node.
+
+### Is RocketRide open source?
+
+Yes. The engine is [MIT-licensed on GitHub](https://github.com/rocketride-org/rocketride-server), and so is this Actor.
+
+### What are the known limitations?
+
+- **CPU only.** Nodes that need a GPU will be slow or will not work here.
+- **PII detection is model-based.** It reliably masked names, organizations and places in our tests, but it can miss items such as the domain of an email address. Review the output before relying on it for compliance.
+- **`send_files` reads from the container.** The MCP `send_files` tool and upload links read from the Actor's container, not your machine. To send your own files, use `send_data`, a pipeline endpoint, or `/run` with a URL.
+- **Restarts clear running pipelines.** They live in the server's memory. Save results with `?save=true`.
+- **Extra nodes install on first use.** Nodes outside the ready-made pipelines install their dependencies the first time they run, so that run is slower.
+
+## Development
+
+This repo is the Actor's source. The image is built on a pinned RocketRide engine release.
+
+| Path | What it is |
+| --- | --- |
+| [`src/main.py`](src/main.py) | HTTP layer in front of the engine: auth, `/mcp`, `/pipelines`, `/run`, `/engine` |
+| [`src/pipelines.py`](src/pipelines.py) | Catalog and builders for the ready-made pipelines |
+| [`src/apify_env.py`](src/apify_env.py) | Reads Actor input and decrypts secret fields, without the Apify SDK |
+| [`pipelines/`](pipelines/) | The ready-made pipelines as `.pipe` files, generated by `scripts/export_pipes.py` |
+| [`scripts/prepare_image.py`](scripts/prepare_image.py) | Build-time image prep: CPU-only PyTorch, baked-in models |
+| [`.actor/`](.actor/) | Actor config, input schema and OpenAPI schema |
+| [`tests/`](tests/) | Unit tests against a mock engine, and Docker integration tests |
+
+Run the checks CI runs:
+
+```bash
+pip install starlette uvicorn httpx cryptography python-multipart
+python scripts/export_pipes.py --check   # .pipe files are up to date
+python tests/test_local.py               # wrapper against a mock engine
+bash tests/integration.sh                # builds the image and tests the real engine (needs Docker)
+```
 
 ## Support
 
-- Bugs and feature requests: the **Issues** tab here, or [GitHub issues](https://github.com/rocketride-org/rocketride-apify-actor/issues)
-- Community: [RocketRide Discord](https://discord.gg/PMXrtenMsY)
-- Docs: [docs.rocketride.org](https://docs.rocketride.org/) and [llms.txt](https://docs.rocketride.org/llms.txt) for agents
-- Custom pipelines and enterprise deployments: [rocketride.org](https://rocketride.org)
+- **Bugs and feature requests:** [GitHub issues](https://github.com/rocketride-org/rocketride-apify-actor/issues) or the Actor's **Issues** tab on Apify
+- **Community:** [RocketRide Discord](https://discord.gg/PMXrtenMsY)
+- **Docs:** [docs.rocketride.org](https://docs.rocketride.org/), and [llms.txt](https://docs.rocketride.org/llms.txt) for agents
+- **Project home:** [rocketride.org](https://rocketride.org)
