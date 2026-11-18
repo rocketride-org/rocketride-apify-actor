@@ -12,7 +12,7 @@ docker run -d --name rr-actor --network host \
   -e ACTOR_WEB_SERVER_PORT=4321 -e ROCKETRIDE_ACTOR_MODE=server \
   -e ACTOR_INPUT_JSON='{"llmBaseUrl":"http://127.0.0.1:9911/v1","llmModel":"mock-model","llmApiKey":"sk-mock"}' "$IMAGE"
 trap 'kill $MOCK_PID 2>/dev/null || true; echo "---- container logs ----"; docker logs rr-actor 2>&1 | grep -v "GET /version" | tail -120 | cut -c1-400' EXIT
-python3 tests/integration_check.py
+RC=0; python3 tests/integration_check.py || RC=$?
 
 echo "== IMAGE SIZE REPORT"
 docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep -i rocketride || true
@@ -22,3 +22,4 @@ docker run --rm --entrypoint sh "$IMAGE" -c '
   echo "-- biggest python packages"; SP=$(find /opt/rocketride -type d -name site-packages | head -1); du -sh "$SP"/* 2>/dev/null | sort -h | tail -12
   echo "-- models"; du -sh ~/.cache/* ~/.EasyOCR 2>/dev/null | sort -h | tail -10
 ' || true
+exit $RC

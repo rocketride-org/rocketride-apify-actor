@@ -696,6 +696,16 @@ async def prebake() -> int:
     return 1 if must_work else 0
 
 
+async def serve(server: uvicorn.Server) -> None:
+    """Run a uvicorn server without its signal capture.
+
+    uvicorn saves and restores signal handlers around serve(); the engine's embedded Python has
+    native handlers it cannot restore, which raises on shutdown. We install our own handlers.
+    """
+    inner = getattr(server, '_serve', None)
+    await (inner() if inner else server.serve())
+
+
 async def main() -> int:
     actor_input = apify_env.load_input()
     S.warm = OrderedDict()
@@ -710,7 +720,7 @@ async def main() -> int:
         import mock_llm
 
         mock_server = uvicorn.Server(uvicorn.Config(mock_llm.app, host='127.0.0.1', port=MOCK_LLM_PORT, log_level='warning'))
-        asyncio.create_task(mock_server.serve())
+        asyncio.create_task(serve(mock_server))
         os.environ.update({
             pipelines.COMPAT_BASE_URL_ENV: f'http://127.0.0.1:{MOCK_LLM_PORT}/v1',
             pipelines.COMPAT_MODEL_ENV: 'mock-model',
@@ -759,7 +769,7 @@ async def main() -> int:
         except NotImplementedError:
             pass
     log.info('RocketRide Actor listening on port %s (standby=%s)', PORT, apify_env.is_standby())
-    await server.serve()
+    await serve(server)
     if S.engine_proc and S.engine_proc.returncode is None:
         S.engine_proc.terminate()
     return 0
