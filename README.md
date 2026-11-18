@@ -142,7 +142,7 @@ Each run is single-tenant. Your files, pipelines and keys stay inside your own A
 ### Known limitations
 
 - Upload and "dropper" links that the MCP tools generate point inside the container. To get files in from outside, use `/pipelines/*` or `/run` with a URL or bytes instead.
-- `send_files` is not offered over MCP because the engine sits behind Apify's proxy. Use `send_data` or the HTTP endpoints instead.
+- The MCP `send_files` tool reads paths inside the Actor's container, not on your machine. To send your own files, use `send_data` or the HTTP endpoints instead.
 - State lives in the run's memory, so a run restart clears running pipelines. Save results to a dataset with `?save=true`.
 
 ### Can I use this from n8n, Make or Zapier?
