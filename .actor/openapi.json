@@ -1,7 +1,7 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "RocketRide Server Actor",
+    "title": "RocketRide - Meta harness",
     "version": "0.1",
     "description": "HTTP and MCP endpoints of the RocketRide engine running in Apify Standby mode. Authenticate every request with `Authorization: Bearer <APIFY_TOKEN>`."
   },

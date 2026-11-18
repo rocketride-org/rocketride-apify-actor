@@ -1,4 +1,4 @@
-# RocketRide: AI Pipelines & MCP Server
+# RocketRide - Meta harness
 
 RocketRide is an AI Meta Harness - backed by a strong C++ engine runtime - that can help you build your agents and applications. Our goal is to help solopreneurs and pro developers out there to provide an end to end AI harness to make their ideas a reality. They do the building. We take care of everything right from auth to billing.
 

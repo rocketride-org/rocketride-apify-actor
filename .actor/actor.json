@@ -1,7 +1,7 @@
 {
   "actorSpecification": 1,
   "name": "rocketride",
-  "title": "RocketRide: AI Pipelines & MCP Server",
+  "title": "RocketRide - Meta harness",
   "description": "Run the open-source RocketRide AI meta-harness as a warm HTTP + MCP endpoint. Agents can build, validate, run and trace AI pipelines, or call ready-made document pipelines (doc-to-text, PII redaction) with no API keys.",
   "version": "0.1",
   "buildTag": "latest",
