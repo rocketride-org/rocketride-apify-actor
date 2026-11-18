@@ -19,8 +19,8 @@ This Actor runs the open-source **RocketRide engine** on Apify as an always-warm
 
 1. Click **Try for free** (or **Start**) to open the Actor in Apify Console. You can optionally add LLM provider keys in the input.
 2. Copy your **Apify API token** from [Settings → API & Integrations](https://console.apify.com/settings/integrations).
-3. Call the Actor's **Standby URL**: `https://rocketride--rocketride.apify.actor`. The first request starts the server, and later requests hit the warm engine.
-4. Connect your agent to `https://rocketride--rocketride.apify.actor/mcp`, or call the HTTP endpoints below.
+3. Call the Actor's **Standby URL**: `https://rocketrideai--rocketride.apify.actor`. The first request starts the server, and later requests hit the warm engine.
+4. Connect your agent to `https://rocketrideai--rocketride.apify.actor/mcp`, or call the HTTP endpoints below.
 
 Every request needs `Authorization: Bearer <APIFY_TOKEN>`.
 
@@ -29,7 +29,7 @@ Every request needs `Authorization: Bearer <APIFY_TOKEN>`.
 **Claude Code**
 
 ```bash
-claude mcp add --transport http rocketride https://rocketride--rocketride.apify.actor/mcp \
+claude mcp add --transport http rocketride https://rocketrideai--rocketride.apify.actor/mcp \
   --header "Authorization: Bearer $APIFY_TOKEN"
 ```
 
@@ -39,7 +39,7 @@ claude mcp add --transport http rocketride https://rocketride--rocketride.apify.
 {
   "mcpServers": {
     "rocketride": {
-      "url": "https://rocketride--rocketride.apify.actor/mcp",
+      "url": "https://rocketrideai--rocketride.apify.actor/mcp",
       "headers": { "Authorization": "Bearer <APIFY_TOKEN>" }
     }
   }
@@ -65,7 +65,7 @@ You can send input three ways: **raw bytes** (set `Content-Type`), **multipart/f
 ### Example: extract text from a PDF by URL
 
 ```bash
-curl -X POST "https://rocketride--rocketride.apify.actor/pipelines/doc-to-text" \
+curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/doc-to-text" \
   -H "Authorization: Bearer $APIFY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://arxiv.org/pdf/1706.03762"}'
@@ -74,7 +74,7 @@ curl -X POST "https://rocketride--rocketride.apify.actor/pipelines/doc-to-text" 
 ### Example: redact PII from a local file
 
 ```bash
-curl -X POST "https://rocketride--rocketride.apify.actor/pipelines/redact-pii?filename=contract.docx" \
+curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/redact-pii?filename=contract.docx" \
   -H "Authorization: Bearer $APIFY_TOKEN" \
   -H "Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document" \
   --data-binary @contract.docx
@@ -99,7 +99,7 @@ curl -X POST "https://rocketride--rocketride.apify.actor/pipelines/redact-pii?fi
 Design a pipeline visually in the [RocketRide VS Code extension](https://marketplace.visualstudio.com/items?itemName=RocketRide.rocketride) and give it a **webhook** source. Then send the `.pipe` JSON along with your data:
 
 ```bash
-curl -X POST "https://rocketride--rocketride.apify.actor/run" \
+curl -X POST "https://rocketrideai--rocketride.apify.actor/run" \
   -H "Authorization: Bearer $APIFY_TOKEN" -H "Content-Type: application/json" \
   -d "{\"pipeline\": $(cat my-pipeline.pipe), \"text\": \"Summarize this...\"}"
 ```
