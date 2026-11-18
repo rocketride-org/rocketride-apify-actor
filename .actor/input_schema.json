@@ -1,0 +1,51 @@
+{
+  "title": "RocketRide server settings",
+  "description": "Optional provider keys for LLM nodes. The featured document pipelines and the MCP tools for building and validating pipelines work without any keys. Keys are stored encrypted and passed to the engine as environment variables; they never leave your run.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "openaiApiKey": {
+      "title": "OpenAI API key",
+      "type": "string",
+      "description": "Exposed to pipelines as ${ROCKETRIDE_OPENAI_KEY}.",
+      "editor": "textfield",
+      "isSecret": true,
+      "sectionCaption": "LLM provider keys (optional)"
+    },
+    "anthropicApiKey": {
+      "title": "Anthropic API key",
+      "type": "string",
+      "description": "Exposed to pipelines as ${ROCKETRIDE_ANTHROPIC_KEY}.",
+      "editor": "textfield",
+      "isSecret": true
+    },
+    "geminiApiKey": {
+      "title": "Google Gemini API key",
+      "type": "string",
+      "description": "Exposed to pipelines as ${ROCKETRIDE_GEMINI_KEY}.",
+      "editor": "textfield",
+      "isSecret": true
+    },
+    "additionalEnv": {
+      "title": "Other node credentials",
+      "type": "object",
+      "description": "Any other ROCKETRIDE_* variables your pipelines reference, e.g. {\"ROCKETRIDE_QDRANT_HOST\": \"...\", \"ROCKETRIDE_COHERE_KEY\": \"...\"}. Names must start with ROCKETRIDE_.",
+      "editor": "json",
+      "isSecret": true,
+      "sectionCaption": "Advanced"
+    },
+    "warmFeaturedPipelines": {
+      "title": "Pre-warm featured pipelines",
+      "type": "boolean",
+      "description": "Start the doc-to-text and redact-pii pipelines when the server boots, so the first request is fast.",
+      "default": true
+    },
+    "verboseLogging": {
+      "title": "Verbose engine logs",
+      "type": "boolean",
+      "description": "Run the engine with --verbose for debugging.",
+      "default": false
+    }
+  },
+  "required": []
+}

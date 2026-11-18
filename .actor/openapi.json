@@ -1,0 +1,125 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "RocketRide Server Actor",
+    "version": "0.1",
+    "description": "HTTP and MCP endpoints of the RocketRide engine running in Apify Standby mode. Authenticate every request with `Authorization: Bearer <APIFY_TOKEN>`."
+  },
+  "servers": [{ "url": "/" }],
+  "components": {
+    "securitySchemes": {
+      "apifyToken": { "type": "http", "scheme": "bearer", "description": "Your Apify API token" }
+    },
+    "schemas": {
+      "PipelineInput": {
+        "type": "object",
+        "description": "Send either inline text or a URL to fetch. You can also POST the raw file bytes or multipart/form-data instead of JSON.",
+        "properties": {
+          "text": { "type": "string", "example": "Contact Jane Doe at jane@example.com or +1 415 555 0100." },
+          "url": { "type": "string", "format": "uri", "example": "https://arxiv.org/pdf/1706.03762" },
+          "filename": { "type": "string", "example": "contract.pdf" }
+        }
+      },
+      "PipelineResult": {
+        "type": "object",
+        "properties": {
+          "pipeline": { "type": "string" },
+          "filename": { "type": "string" },
+          "contentType": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "durationMs": { "type": "integer" },
+          "text": { "type": "string", "nullable": true, "description": "Text lane output, joined" },
+          "result": { "type": "object", "description": "Raw engine result (objects, resultTypes, counts)" }
+        }
+      },
+      "Error": { "type": "object", "properties": { "error": { "type": "string" } } }
+    }
+  },
+  "security": [{ "apifyToken": [] }],
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "Server info and endpoint list",
+        "responses": { "200": { "description": "Server info", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Engine health",
+        "responses": { "200": { "description": "Engine is up" }, "503": { "description": "Engine is starting or down" } }
+      }
+    },
+    "/pipelines": {
+      "get": {
+        "summary": "List featured pipelines",
+        "responses": { "200": { "description": "Featured pipelines with their .pipe definitions" } }
+      }
+    },
+    "/pipelines/{name}": {
+      "post": {
+        "summary": "Run a featured pipeline (doc-to-text, redact-pii)",
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string", "enum": ["doc-to-text", "redact-pii"] } },
+          { "name": "filename", "in": "query", "required": false, "schema": { "type": "string" }, "description": "File name hint for raw uploads" },
+          { "name": "save", "in": "query", "required": false, "schema": { "type": "boolean" }, "description": "Also append the result to the run's dataset" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/PipelineInput" } },
+            "application/octet-stream": { "schema": { "type": "string", "format": "binary" } },
+            "multipart/form-data": { "schema": { "type": "object", "properties": { "file": { "type": "string", "format": "binary" } } } }
+          }
+        },
+        "responses": {
+          "200": { "description": "Pipeline output", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PipelineResult" } } } },
+          "400": { "description": "Bad input", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "502": { "description": "Engine error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/run": {
+      "post": {
+        "summary": "Run any webhook-source RocketRide pipeline once",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["pipeline"],
+                "properties": {
+                  "pipeline": { "type": "object", "description": "Contents of a .pipe file with a webhook source" },
+                  "text": { "type": "string" },
+                  "url": { "type": "string", "format": "uri" },
+                  "filename": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Pipeline output" }, "400": { "description": "Bad input" }, "502": { "description": "Engine error" } }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "summary": "RocketRide MCP server (Streamable HTTP)",
+        "description": "Point any MCP client here. Tools let agents create, validate, run and trace pipelines. See https://docs.rocketride.org/connect/mcp/http/tools",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "JSON-RPC response or event stream" } }
+      }
+    },
+    "/engine/{path}": {
+      "get": {
+        "summary": "Pass-through to the engine HTTP API (e.g. /engine/version, /engine/services)",
+        "parameters": [{ "name": "path", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Engine response" } }
+      },
+      "post": {
+        "summary": "Pass-through to the engine HTTP API (e.g. /engine/task, /engine/webhook, /engine/pipe/validate)",
+        "parameters": [{ "name": "path", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Engine response" } }
+      }
+    }
+  }
+}
