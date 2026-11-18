@@ -177,7 +177,7 @@ The Actor is **free**. You pay for **Apify platform usage** while your server ru
 
 - Each user gets a **private server** in their own Apify account (single-tenant).
 - The server starts on the first request and stops after the idle timeout you set in **Settings → Server**.
-- **4 GB of memory** is the recommended setting. The OCR and entity models need at least 2 GB.
+- **4 GB of memory** is the minimum and the recommended setting. With all six pipelines loaded, the server used about 3 GB in our tests.
 - Apify's free plan credits are enough to try every pipeline.
 
 ## Performance
