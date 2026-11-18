@@ -5,7 +5,9 @@ Runs the RocketRide engine on loopback and fronts it with a small HTTP layer tha
 * answers Apify's readiness probe (GET / with x-apify-container-server-readiness-probe),
 * swaps the caller's Apify token for the engine's internal rr_ key,
 * streams the engine's built-in MCP endpoint (/mcp) and HTTP API (/engine/...),
-* serves warm, ready-made "featured pipelines" (/pipelines/{name}) and ad-hoc runs (/run).
+* serves ready-made pipelines (/pipelines/{name}): document pipelines that need no keys,
+  and LLM pipelines (summarize, extract-data, ask, agent) built per request,
+* runs any webhook-source pipeline once (/run).
 
 In Standby (Server) mode it serves forever. Started any other way on the platform
 (e.g. Apify's daily default-input test) it runs a quick self-test, writes the
@@ -15,6 +17,7 @@ result to the dataset and OUTPUT, and exits.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 import json
 import logging
 import mimetypes
@@ -38,14 +41,14 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response, Strea
 from starlette.routing import Route  # noqa: E402
 
 import apify_env  # noqa: E402
+import pipelines  # noqa: E402
 
-ACTOR_VERSION = '0.1'
+ACTOR_VERSION = '0.2'
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', stream=sys.stdout)
 log = logging.getLogger('rocketride-actor')
 logging.getLogger('httpx').setLevel(logging.WARNING)
 
 ROOT = Path(__file__).resolve().parent.parent
-PIPELINE_DIR = Path(os.environ.get('ROCKETRIDE_ACTOR_PIPELINES', ROOT / 'pipelines'))
 ENGINE_HOME = Path(os.environ.get('ROCKETRIDE_HOME', '/opt/rocketride'))
 ENGINE_PORT = int(os.environ.get('ROCKETRIDE_ENGINE_PORT', '5565'))
 ENGINE_URL = f'http://127.0.0.1:{ENGINE_PORT}'
@@ -61,16 +64,10 @@ HOP_BY_HOP = {
     'transfer-encoding', 'upgrade', 'host', 'content-length',
 }
 
-FEATURED: dict[str, dict[str, str]] = {
-    'doc-to-text': {
-        'title': 'Document to text',
-        'description': 'Any document (PDF, DOCX, PPTX, XLSX, HTML, images, ...) to clean text, with OCR for embedded images. No API keys needed.',
-    },
-    'redact-pii': {
-        'title': 'Redact PII',
-        'description': 'Parse a document, OCR images, detect named entities and return text with personal data anonymized. No API keys needed.',
-    },
-}
+CATALOG = pipelines.CATALOG
+STATIC = [n for n, c in CATALOG.items() if not c['needsLlm']]
+MAX_WARM_LLM = 3  # LLM pipelines kept running at once; the oldest is stopped beyond this
+MOCK_LLM_PORT = 9911
 
 
 class State:
@@ -79,8 +76,8 @@ class State:
     engine_ready = asyncio.Event()
     engine_version: Any = None
     client: httpx.AsyncClient | None = None
-    pipelines: dict[str, dict] = {}
-    warm_tokens: dict[str, str] = {}
+    env: dict[str, str] = {}
+    warm: 'OrderedDict[str, str]' = None  # cache key -> task token
     warm_lock: asyncio.Lock | None = None
     started_at = time.time()
 
@@ -98,6 +95,12 @@ def build_engine_env(actor_input: dict[str, Any]) -> dict[str, str]:
         'anthropicApiKey': 'ROCKETRIDE_ANTHROPIC_KEY',
         'geminiApiKey': 'ROCKETRIDE_GEMINI_KEY',
     }
+    mapping.update({
+        'llmBaseUrl': pipelines.COMPAT_BASE_URL_ENV,
+        'llmModel': pipelines.COMPAT_MODEL_ENV,
+        'llmApiKey': pipelines.PROVIDERS['openai-compatible']['key_env'],
+        'defaultModel': pipelines.DEFAULT_MODEL_ENV,
+    })
     for field, var in mapping.items():
         if actor_input.get(field):
             env[var] = str(actor_input[field])
@@ -117,6 +120,10 @@ def build_engine_env(actor_input: dict[str, Any]) -> dict[str, str]:
     env['ROCKETRIDE_URI'] = f'ws://127.0.0.1:{ENGINE_PORT}'
     configured = sorted(k for k in env if k.startswith('ROCKETRIDE_') and k.endswith(('_KEY', '_TOKEN')) and k != 'ROCKETRIDE_APIKEY')
     log.info('Provider credentials configured (names only): %s', ', '.join(configured) or 'none')
+    if env.get(pipelines.COMPAT_BASE_URL_ENV) and not env.get(pipelines.PROVIDERS['openai-compatible']['key_env']):
+        env[pipelines.PROVIDERS['openai-compatible']['key_env']] = 'none'  # keyless local endpoints
+    S.env = env
+    log.info('LLM providers available to ready-made pipelines: %s', ', '.join(pipelines.configured_providers(env)) or 'none')
     return env
 
 
@@ -164,12 +171,6 @@ async def watch_engine() -> None:
     code = await S.engine_proc.wait()
     log.error('RocketRide engine exited with code %s; stopping the Actor.', code)
     os._exit(1)
-
-
-def load_pipelines() -> None:
-    for name in FEATURED:
-        path = PIPELINE_DIR / f'{name}.pipe'
-        S.pipelines[name] = json.loads(path.read_text())
 
 
 # --------------------------------------------------------------------------- engine HTTP helpers
@@ -226,19 +227,95 @@ async def send_to_task(token: str, body: bytes, content_type: str, filename: str
     return unwrap(r.json())
 
 
-async def warm_token(name: str, refresh: bool = False) -> str:
+async def warm_token(name: str, pipeline: dict, refresh: bool = False) -> str:
+    """Token of a running task for this exact pipeline, starting it if needed."""
     assert S.warm_lock
+    key = pipelines.cache_key(name, pipeline)
     async with S.warm_lock:
-        if refresh and name in S.warm_tokens:
-            await stop_task(S.warm_tokens.pop(name))
-        if name not in S.warm_tokens:
-            S.warm_tokens[name] = await start_task(S.pipelines[name])
-            log.info('Featured pipeline %s is warm.', name)
-        return S.warm_tokens[name]
+        if refresh and key in S.warm:
+            await stop_task(S.warm.pop(key))
+        if key in S.warm:
+            S.warm.move_to_end(key)
+            return S.warm[key]
+        token = await start_task(pipeline)
+        S.warm[key] = token
+        log.info('Pipeline %s is running.', name)
+        llm_keys = [k for k in S.warm if k.split(':', 1)[0] not in STATIC]
+        while len(llm_keys) > MAX_WARM_LLM:
+            await stop_task(S.warm.pop(llm_keys.pop(0)))
+        return token
+
+
+def lanes(result: Any) -> dict[str, list]:
+    """Group a webhook result's output by lane (text, answers, ...) across objects."""
+    out: dict[str, list] = {}
+    objects = result.get('objects') if isinstance(result, dict) else None
+    for obj in (objects or {}).values():
+        if not isinstance(obj, dict):
+            continue
+        for lane in ('text', 'answers', 'documents', 'table'):
+            value = obj.get(lane)
+            if value is None:
+                continue
+            out.setdefault(lane, []).extend(value if isinstance(value, list) else [value])
+    return out
+
+
+LLM_ERROR_PREFIXES = ('**LLM error**', 'LLM error:')
+
+
+def object_errors(result: Any) -> list[str]:
+    """Errors the engine reports per object, including LLM failures it returns as an answer."""
+    errs = []
+    objects = result.get('objects') if isinstance(result, dict) else None
+    for obj in (objects or {}).values():
+        if not isinstance(obj, dict):
+            continue
+        err = obj.get('error')
+        if err:
+            errs.append(str(err.get('message', err)) if isinstance(err, dict) else str(err))
+        elif str(obj.get('status', 'OK')).upper() not in ('OK', 'SUCCESS'):
+            errs.append(str(obj.get('message') or obj.get('status')))
+        for a in obj.get('answers') or []:
+            if isinstance(a, str) and a.startswith(LLM_ERROR_PREFIXES):
+                errs.append(a.replace('**', '').strip())
+    return errs
+
+
+def answer_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for k in ('answer', 'text', 'content'):
+            if value.get(k) is not None:
+                return answer_text(value[k])
+        return json.dumps(value)
+    return str(value)
+
+
+def shape_output(result: Any) -> dict[str, Any]:
+    """Friendly top-level fields: text (text lane), answer (answers lane) and data (answer parsed as JSON)."""
+    by_lane = lanes(result)
+    out: dict[str, Any] = {}
+    if by_lane.get('text'):
+        out['text'] = '\n'.join(str(t).strip('\n') for t in by_lane['text']).strip()
+    if by_lane.get('answers'):
+        answers = by_lane['answers']
+        first = answers[0]
+        if isinstance(first, (list, dict)) and not (isinstance(first, dict) and 'answer' in first):
+            out['data'] = first if len(answers) == 1 else answers  # structured answer, e.g. extract-data rows
+        else:
+            texts = [answer_text(a) for a in answers]
+            out['answer'] = texts[0] if len(texts) == 1 else texts
+            try:
+                parsed = json.loads(texts[0])
+                if isinstance(parsed, (list, dict)):
+                    out['data'] = parsed
+            except (ValueError, TypeError):
+                pass
+    return out
 
 
 def extract_text(result: Any) -> str | None:
-    """Best-effort: collect 'text' lane output from a webhook DataResult."""
+    """Collect 'text' lane output from a webhook result (used by /run and the self-test)."""
     texts: list[str] = []
 
     def walk(node: Any, key: str | None = None) -> None:
@@ -256,33 +333,55 @@ def extract_text(result: Any) -> str | None:
     return '\n'.join(t.strip('\n') for t in texts).strip() if texts else None
 
 
-async def read_payload(request: Request) -> tuple[bytes, str, str | None]:
-    """Accept raw bytes, multipart (first file), or JSON {"text": ...} / {"url": ...}."""
+def _pick_params(source: Any) -> dict[str, Any]:
+    return {k: source[k] for k in pipelines.PARAM_NAMES if k in source and source[k] is not None}
+
+
+async def read_request(request: Request, input_kind: str = 'document') -> tuple[bytes, str, str | None, dict[str, Any]]:
+    """Payload and pipeline parameters from raw bytes, multipart, or JSON.
+
+    JSON: {"text": ...} or {"url": ...} plus parameters. Raw/multipart: parameters in the query string.
+    For input_kind 'question' the payload is the question itself.
+    """
     ctype = request.headers.get('content-type', 'application/octet-stream').split(';')[0].strip().lower()
     filename = request.query_params.get('filename')
+    params = _pick_params(request.query_params)
 
     if ctype == 'application/json':
         data = await request.json()
         if not isinstance(data, dict):
-            raise ValueError('JSON body must be an object with "text" or "url".')
+            raise ValueError('JSON body must be an object.')
+        params.update(_pick_params(data))
+        if input_kind == 'question':
+            question = data.get('question') or data.get('text')
+            if not question:
+                raise ValueError('JSON body must include "question".')
+            return str(question).encode('utf-8'), 'text/plain', 'question.txt', params
         if data.get('text') is not None:
-            return str(data['text']).encode('utf-8'), 'text/plain', data.get('filename') or filename or 'input.txt'
+            return str(data['text']).encode('utf-8'), 'text/plain', data.get('filename') or filename or 'input.txt', params
         if data.get('url'):
-            return await download(str(data['url']), data.get('filename') or filename)
+            return (*await download(str(data['url']), data.get('filename') or filename), params)
         raise ValueError('JSON body must include "text" or "url".')
+
+    if input_kind == 'question':
+        question = params.get('question') or (await request.body()).decode('utf-8', 'replace').strip()
+        if not question:
+            raise ValueError('Send the question as JSON {"question": ...} or as a plain-text body.')
+        return str(question).encode('utf-8'), 'text/plain', 'question.txt', params
 
     if ctype == 'multipart/form-data':
         form = await request.form()
+        params.update(_pick_params({k: v for k, v in form.items() if isinstance(v, str)}))
         for value in form.values():
             if hasattr(value, 'read'):
                 content = await value.read()
-                return content, (value.content_type or 'application/octet-stream'), value.filename or filename
+                return content, (value.content_type or 'application/octet-stream'), value.filename or filename, params
         raise ValueError('Multipart body has no file field.')
 
     body = await request.body()
     if not body:
         raise ValueError('Empty request body. Send a file, or JSON {"text": ...} or {"url": ...}.')
-    return body, ctype, filename
+    return body, ctype, filename, params
 
 
 async def download(url: str, filename: str | None) -> tuple[bytes, str, str | None]:
@@ -335,6 +434,8 @@ async def root(request: Request) -> Response:
             'engineApi': f'{url}/engine/...',
             'health': f'{url}/health',
         },
+        'pipelines': list(CATALOG),
+        'llmProviders': pipelines.configured_providers(S.env),
         'auth': 'Authorization: Bearer <APIFY_TOKEN>',
         'docs': 'https://docs.rocketride.org/',
     })
@@ -345,32 +446,60 @@ async def health(request: Request) -> Response:
     return JSONResponse({'ok': ok, 'engineVersion': S.engine_version}, status_code=200 if ok else 503)
 
 
+def describe(name: str, url: str) -> dict[str, Any]:
+    c = CATALOG[name]
+    return {
+        'name': name,
+        'title': c['title'],
+        'description': c['description'],
+        'needsLlm': c['needsLlm'],
+        'input': c['input'],
+        'params': c['params'],
+        'endpoint': f'{url}/pipelines/{name}',
+    }
+
+
 async def list_pipelines(request: Request) -> Response:
     url = base_url(request)
-    return JSONResponse([
-        {'name': n, **meta, 'endpoint': f'{url}/pipelines/{n}', 'pipeline': S.pipelines.get(n)}
-        for n, meta in FEATURED.items()
-    ])
+    return JSONResponse({
+        'llmProviders': pipelines.configured_providers(S.env),
+        'pipelines': [describe(n, url) for n in CATALOG],
+    })
+
+
+async def get_pipeline(request: Request) -> Response:
+    """The .pipe definition this endpoint would run for the given parameters (keys stay as ${VARS})."""
+    name = request.path_params['name']
+    if name not in CATALOG:
+        return JSONResponse({'error': f'Unknown pipeline {name!r}', 'available': list(CATALOG)}, status_code=404)
+    info = describe(name, base_url(request))
+    try:
+        info['pipeline'] = pipelines.build(name, _pick_params(request.query_params), S.env)
+    except pipelines.PipelineError as e:
+        info['pipeline'] = None
+        info['note'] = str(e)
+    return JSONResponse(info)
 
 
 async def run_featured(request: Request) -> Response:
     name = request.path_params['name']
-    if name not in FEATURED:
-        return JSONResponse({'error': f'Unknown pipeline {name!r}', 'available': list(FEATURED)}, status_code=404)
+    if name not in CATALOG:
+        return JSONResponse({'error': f'Unknown pipeline {name!r}', 'available': list(CATALOG)}, status_code=404)
     if (resp := await ensure_ready()) is not None:
         return resp
     try:
-        body, ctype, filename = await read_payload(request)
-    except (ValueError, httpx.HTTPError) as e:
+        body, ctype, filename, params = await read_request(request, CATALOG[name]['input'])
+        pipeline = pipelines.build(name, params, S.env)
+    except (ValueError, httpx.HTTPError) as e:  # PipelineError is a ValueError
         return JSONResponse({'error': str(e)}, status_code=400)
 
     started = time.time()
     try:
-        token = await warm_token(name)
+        token = await warm_token(name, pipeline)
         try:
             result = await send_to_task(token, body, ctype, filename)
         except (EngineError, httpx.HTTPError):
-            token = await warm_token(name, refresh=True)  # task may have been recycled; retry once
+            token = await warm_token(name, pipeline, refresh=True)  # task may have been recycled; retry once
             result = await send_to_task(token, body, ctype, filename)
     except EngineError as e:
         return JSONResponse({'error': str(e), 'engine': e.payload}, status_code=502)
@@ -383,11 +512,18 @@ async def run_featured(request: Request) -> Response:
         'contentType': ctype,
         'bytes': len(body),
         'durationMs': int((time.time() - started) * 1000),
-        'text': extract_text(result),
-        'result': result,
+        **shape_output(result),
     }
+    errors = object_errors(result)
+    if errors:
+        for k in ('answer', 'data'):
+            out.pop(k, None)
+        out['error'] = errors[0]
+        out['result'] = result
+        return JSONResponse(out, status_code=502)
     if request.query_params.get('save') in ('1', 'true'):
-        await apify_env.push_data({k: v for k, v in out.items() if k != 'result'})
+        await apify_env.push_data(dict(out))
+    out['result'] = result
     return JSONResponse(out)
 
 
@@ -451,6 +587,7 @@ routes = [
     Route('/', root, methods=['GET', 'HEAD']),
     Route('/health', health, methods=['GET']),
     Route('/pipelines', list_pipelines, methods=['GET']),
+    Route('/pipelines/{name}', get_pipeline, methods=['GET']),
     Route('/pipelines/{name}', run_featured, methods=['POST']),
     Route('/run', run_adhoc, methods=['POST']),
     Route('/mcp', proxy, methods=ALL),
@@ -467,9 +604,9 @@ app = Starlette(routes=routes)
 
 async def self_test() -> int:
     """Non-standby run: prove the engine and a featured pipeline work, then exit."""
-    report: dict[str, Any] = {'mode': 'self-test', 'engineVersion': S.engine_version, 'featuredPipelines': list(FEATURED)}
+    report: dict[str, Any] = {'mode': 'self-test', 'engineVersion': S.engine_version, 'pipelines': list(CATALOG)}
     try:
-        token = await warm_token('doc-to-text')
+        token = await warm_token('doc-to-text', pipelines.build('doc-to-text', {}, S.env))
         result = await send_to_task(token, b'RocketRide on Apify: self-test document.', 'text/plain', 'self-test.txt')
         report['docToText'] = {'ok': True, 'text': extract_text(result)}
     except Exception as e:  # noqa: BLE001
@@ -500,45 +637,97 @@ def sample_png() -> bytes | None:
 
 
 async def prebake() -> int:
-    """Docker build step: run each featured pipeline once so node dependencies and
-    models are installed into the image instead of on a user's first request."""
-    samples: list[tuple[bytes, str, str]] = [
-        (b'Contact John Smith at john.smith@example.com in Seattle.', 'text/plain', 'warmup.txt')
+    """Docker build step: run every ready-made pipeline once so node dependencies and models are
+    installed into the image instead of on a user's first request. LLM pipelines talk to the
+    built-in mock LLM, so no real key is involved."""
+    doc = b'Invoice INV-2026-0042 from Acme Robotics to John Smith (john.smith@example.com), Seattle. Total due: 960.00 USD.'
+    # The image sample is rendered lazily: Pillow is only importable once a pipeline has installed it.
+    samples: list[tuple[bytes | None, str, str]] = [(doc, 'text/plain', 'warmup.txt'), (None, 'image/png', 'warmup.png')]
+    compat = {'provider': 'openai-compatible'}
+    jobs: list[tuple[str, dict[str, Any], list[tuple[bytes | None, str, str]]]] = [
+        ('doc-to-text', {}, samples),
+        ('redact-pii', {}, samples),
+        ('summarize', dict(compat), samples[:1]),
+        ('extract-data', dict(compat, fields=['invoice_number', 'total']), samples[:1]),
+        ('ask', dict(compat, question='What is the total due?'), samples[:1]),
+        ('agent', dict(compat), [(b'Say hello.', 'text/plain', 'question.txt')]),
     ]
-    png = sample_png()
-    if png:
-        samples.append((png, 'image/png', 'warmup.png'))
-    for name in FEATURED:
-        for body, ctype, filename in samples:
+    failed: list[str] = []
+    for name, params, payloads in jobs:
+        pipeline = pipelines.build(name, params, S.env)
+        for body, ctype, filename in payloads:
+            if body is None:
+                body = sample_png()
+                if body is None:
+                    log.warning('Prebake %s/%s skipped: could not render a sample image.', name, filename)
+                    continue
+            ok = False
             for attempt in range(3):
                 try:
-                    token = await warm_token(name, refresh=attempt > 0)
+                    token = await warm_token(name, pipeline, refresh=attempt > 0)
                     started = time.time()
-                    await send_to_task(token, body, ctype, filename)
-                    log.info('Prebaked %s with %s in %.1fs', name, filename, time.time() - started)
+                    result = await send_to_task(token, body, ctype, filename)
+                    errors = object_errors(result)
+                    if errors:
+                        raise EngineError('; '.join(errors)[:300])
+                    log.info('Prebaked %s with %s in %.1fs -> %s', name, filename, time.time() - started, json.dumps(shape_output(result))[:160])
+                    ok = True
                     break
                 except Exception as e:  # noqa: BLE001
-                    log.warning('Prebake %s/%s attempt %d failed: %s', name, filename, attempt + 1, e)
-    for token in list(S.warm_tokens.values()):
-        await stop_task(token)
-    return 0
+                    log.warning('Prebake %s/%s attempt %d failed: %s', name, filename, attempt + 1, str(e)[:300])
+            if not ok:
+                failed.append(f'{name}/{filename}')
+        for key in [k for k in S.warm if k.startswith(name + ':')]:
+            await stop_task(S.warm.pop(key))
+    # Install the dedicated provider nodes' dependencies: starting the pipeline loads the node.
+    for provider in ('openai', 'anthropic', 'gemini'):
+        try:
+            pipeline = pipelines.build('ask', {'provider': provider, 'question': 'warm-up'}, S.env)
+            started = time.time()
+            token = await start_task(pipeline)
+            await stop_task(token)
+            log.info('Prebaked %s node in %.1fs', pipelines.PROVIDERS[provider]['node'], time.time() - started)
+        except Exception as e:  # noqa: BLE001
+            log.warning('Prebake of provider %s failed: %s', provider, str(e)[:300])
+            failed.append(f'provider/{provider}')
+    if failed:
+        log.error('Prebake finished with failures: %s', ', '.join(failed))
+    must_work = [f for f in failed if f.split('/')[0] in STATIC and f.endswith('.txt')]
+    return 1 if must_work else 0
 
 
 async def main() -> int:
     actor_input = apify_env.load_input()
-    load_pipelines()
+    S.warm = OrderedDict()
     S.warm_lock = asyncio.Lock()
     S.client = httpx.AsyncClient(base_url=ENGINE_URL, timeout=httpx.Timeout(600, connect=10))
 
     mode = os.environ.get('ROCKETRIDE_ACTOR_MODE') or (
         'selftest' if apify_env.is_at_home() and not apify_env.is_standby() else 'server'
     )
+    mock_server = None
+    if mode == 'prebake':
+        import mock_llm
+
+        mock_server = uvicorn.Server(uvicorn.Config(mock_llm.app, host='127.0.0.1', port=MOCK_LLM_PORT, log_level='warning'))
+        asyncio.create_task(mock_server.serve())
+        os.environ.update({
+            pipelines.COMPAT_BASE_URL_ENV: f'http://127.0.0.1:{MOCK_LLM_PORT}/v1',
+            pipelines.COMPAT_MODEL_ENV: 'mock-model',
+            'ROCKETRIDE_LLM_KEY': 'sk-mock',
+            'ROCKETRIDE_OPENAI_KEY': 'sk-build-placeholder',
+            'ROCKETRIDE_ANTHROPIC_KEY': 'sk-ant-build-placeholder',
+            'ROCKETRIDE_GEMINI_KEY': 'build-placeholder',
+        })
     await start_engine(actor_input)
     engine_watch: asyncio.Task | None = None
 
     if mode in ('selftest', 'prebake'):
         await wait_engine_ready()
         code = await (prebake() if mode == 'prebake' else self_test())
+        if mock_server is not None:
+            mock_server.should_exit = True
+            await asyncio.sleep(0.5)
         if S.engine_proc and S.engine_proc.returncode is None:
             S.engine_proc.terminate()
         return code
@@ -554,10 +743,10 @@ async def main() -> int:
             os._exit(1)
         engine_watch = asyncio.create_task(watch_engine())
         if actor_input.get('warmFeaturedPipelines', True):
-            for name in FEATURED:
+            for name in STATIC:
                 for attempt in range(2):
                     try:
-                        await warm_token(name)
+                        await warm_token(name, pipelines.build(name, {}, S.env))
                         break
                     except Exception as e:  # noqa: BLE001
                         log.warning('Could not pre-warm %s (attempt %d): %s', name, attempt + 1, e)

@@ -12,6 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
       - run: pip install starlette uvicorn httpx cryptography python-multipart
+      - run: python scripts/export_pipes.py --check
       - run: python tests/test_local.py
   integration:
     runs-on: ubuntu-latest

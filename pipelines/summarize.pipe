@@ -1,0 +1,72 @@
+{
+  "components": [
+    {
+      "id": "webhook_1",
+      "provider": "webhook",
+      "config": {
+        "hideForm": true,
+        "mode": "Source",
+        "parameters": {},
+        "type": "webhook"
+      }
+    },
+    {
+      "id": "parse_1",
+      "provider": "parse",
+      "config": {},
+      "input": [
+        {
+          "lane": "tags",
+          "from": "webhook_1"
+        }
+      ]
+    },
+    {
+      "id": "summarization_1",
+      "provider": "summarization",
+      "config": {
+        "numberOfSummaries": 3,
+        "numberOfSummaryWords": 250,
+        "numberOfKeyPointWords": 40,
+        "numberOfEntities": 15,
+        "parameters": {}
+      },
+      "input": [
+        {
+          "lane": "text",
+          "from": "parse_1"
+        }
+      ]
+    },
+    {
+      "id": "llm_1",
+      "provider": "llm_openai",
+      "config": {
+        "apikey": "${ROCKETRIDE_OPENAI_KEY}",
+        "parameters": {}
+      },
+      "control": [
+        {
+          "classType": "llm",
+          "from": "summarization_1"
+        }
+      ]
+    },
+    {
+      "id": "response_text_1",
+      "provider": "response_text",
+      "config": {
+        "laneName": "text"
+      },
+      "input": [
+        {
+          "lane": "text",
+          "from": "summarization_1"
+        }
+      ]
+    }
+  ],
+  "source": "webhook_1",
+  "project_id": "f0ee6b3a-c288-5c33-8f16-a540e8612476",
+  "version": 1
+}

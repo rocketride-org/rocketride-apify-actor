@@ -28,8 +28,24 @@ async def webhook(req):
     tok = req.query_params.get('token')
     if tok not in TASKS: return JSONResponse({'status': 'Error', 'error': {'message': 'no task'}})
     body = (await req.body()).decode('utf-8', 'replace')
-    return JSONResponse({'status': 'OK', 'data': {'objectsRequested': 1, 'objectsCompleted': 1,
-        'objects': {'body': {'text': [f"[{req.headers.get('content-type')}|{os.environ.get('ROCKETRIDE_OPENAI_KEY','-')}] {body}"]}}}})
+    providers = [c['provider'] for c in TASKS[tok]['components']]
+    obj = {'name': 'x', 'status': 'OK'}
+    if 'TRIGGER_LLM_ERROR' in body:
+        obj['answers'] = ['**LLM error** \u2014 OpenAIAuthenticationError: Error code: 401']
+    elif 'TRIGGER_NODE_ERROR' in body:
+        obj['error'] = {'message': 'node exploded', 'code': 19}
+    elif 'extract_data' in providers:
+        cols = [f['column'] for c in TASKS[tok]['components'] if c['provider'] == 'extract_data' for f in c['config']['fields']]
+        obj['answers'] = [[{c: 'v' for c in cols}]]
+    elif 'response_answers' in providers:
+        llm = [p for p in providers if p.startswith('llm_')][0]
+        obj['answers'] = [f'ANSWER via {llm}: {body}']
+    else:
+        obj['text'] = [f"[{req.headers.get('content-type')}|{os.environ.get('ROCKETRIDE_OPENAI_KEY','-')}|{','.join(providers)}] {body}\n\n"]
+    return JSONResponse({'status': 'OK', 'data': {'objectsRequested': 1, 'objectsCompleted': 1, 'objects': {'body': obj}}})
+
+async def tasks(req):
+    return JSONResponse({'count': len(TASKS), 'pipelines': [[c['provider'] for c in t['components']] for t in TASKS.values()]})
 
 async def mcp(req):
     if not authed(req): return JSONResponse({'error': 'unauthorized'}, 401)
@@ -42,5 +58,5 @@ async def mcp(req):
     return JSONResponse(res)
 
 app = Starlette(routes=[Route('/version', version), Route('/task', task, methods=['POST', 'DELETE']),
-    Route('/webhook', webhook, methods=['POST']), Route('/mcp', mcp, methods=['POST'])])
+    Route('/webhook', webhook, methods=['POST']), Route('/_tasks', tasks), Route('/mcp', mcp, methods=['POST'])])
 uvicorn.run(app, host='127.0.0.1', port=int(os.environ.get('ROCKETRIDE_ENGINE_PORT', '5565')), log_level='warning')

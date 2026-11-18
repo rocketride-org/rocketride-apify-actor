@@ -26,7 +26,7 @@ def canned_answer(blob: str) -> str:
         })
     if 'extracting data from text' in blob:
         return json.dumps([{'invoice_number': 'INV-001', 'total': '42.00'}])
-    if 'tool_calls' in blob and '"done"' in blob:
+    if 'tool_calls' in blob and 'done' in blob and 'thought' in blob:
         return json.dumps({'thought': 'mock', 'scratch': '', 'remove': [], 'done': True, 'answer': 'MOCK AGENT ANSWER'})
     return 'MOCK ANSWER'
 

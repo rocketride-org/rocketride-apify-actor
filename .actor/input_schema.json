@@ -1,6 +1,6 @@
 {
   "title": "RocketRide server settings",
-  "description": "Optional provider keys for LLM nodes. The featured document pipelines and the MCP tools for building and validating pipelines work without any keys. Keys are stored encrypted and passed to the engine as environment variables; they never leave your run.",
+  "description": "Optional provider keys for LLM nodes. The document pipelines (doc-to-text, redact-pii) and the MCP tools for building and validating pipelines work without any keys. Add one key to unlock summarize, extract-data, ask and agent. Keys are stored encrypted and passed to the engine as environment variables; they never leave your run.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
@@ -26,6 +26,32 @@
       "editor": "textfield",
       "isSecret": true
     },
+    "defaultModel": {
+      "title": "Default model",
+      "type": "string",
+      "description": "Model id the ready-made LLM pipelines use when a request does not name one, e.g. gpt-4o-mini or claude-haiku-4-5. Leave empty for the provider node's default.",
+      "editor": "textfield"
+    },
+    "llmBaseUrl": {
+      "title": "OpenAI-compatible endpoint URL",
+      "type": "string",
+      "description": "Base URL of any OpenAI-compatible API (OpenRouter, Groq, Together, Ollama, ...), e.g. https://openrouter.ai/api/v1.",
+      "editor": "textfield",
+      "sectionCaption": "OpenAI-compatible endpoint (optional)"
+    },
+    "llmModel": {
+      "title": "Model for that endpoint",
+      "type": "string",
+      "description": "Exact model id at that endpoint.",
+      "editor": "textfield"
+    },
+    "llmApiKey": {
+      "title": "API key for that endpoint",
+      "type": "string",
+      "description": "Exposed to pipelines as ${ROCKETRIDE_LLM_KEY}.",
+      "editor": "textfield",
+      "isSecret": true
+    },
     "additionalEnv": {
       "title": "Other node credentials",
       "type": "object",
@@ -35,7 +61,7 @@
       "sectionCaption": "Advanced"
     },
     "warmFeaturedPipelines": {
-      "title": "Pre-warm featured pipelines",
+      "title": "Pre-warm document pipelines",
       "type": "boolean",
       "description": "Start the doc-to-text and redact-pii pipelines when the server boots, so the first request is fast.",
       "default": true

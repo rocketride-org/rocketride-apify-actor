@@ -17,10 +17,10 @@ from typing import Any
 # --------------------------------------------------------------------------- LLM providers
 
 PROVIDERS: dict[str, dict[str, str]] = {
-    'openai': {'node': 'llm_openai', 'key_env': 'ROCKETRIDE_OPENAI_KEY', 'default_profile': 'openai-5-2'},
-    'anthropic': {'node': 'llm_anthropic', 'key_env': 'ROCKETRIDE_ANTHROPIC_KEY', 'default_profile': 'claude-sonnet-4-6'},
-    'gemini': {'node': 'llm_gemini', 'key_env': 'ROCKETRIDE_GEMINI_KEY', 'default_profile': 'gemini-3_1-pro-preview'},
-    'openai-compatible': {'node': 'llm_openai_api', 'key_env': 'ROCKETRIDE_LLM_KEY', 'default_profile': 'custom'},
+    'openai': {'node': 'llm_openai', 'key_env': 'ROCKETRIDE_OPENAI_KEY'},
+    'anthropic': {'node': 'llm_anthropic', 'key_env': 'ROCKETRIDE_ANTHROPIC_KEY'},
+    'gemini': {'node': 'llm_gemini', 'key_env': 'ROCKETRIDE_GEMINI_KEY'},
+    'openai-compatible': {'node': 'llm_openai_api', 'key_env': 'ROCKETRIDE_LLM_KEY'},
 }
 COMPAT_BASE_URL_ENV = 'ROCKETRIDE_LLM_BASE_URL'
 COMPAT_MODEL_ENV = 'ROCKETRIDE_LLM_MODEL'
@@ -61,8 +61,8 @@ def resolve_provider(requested: str | None, env: dict[str, str]) -> str:
     return available[0]
 
 
-def llm_component(provider: str, model: str | None, profiles: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The LLM node for a provider. ``profiles`` maps node name -> {'default': id, 'ids': [...]}."""
+def llm_component(provider: str, model: str | None) -> dict[str, Any]:
+    """The LLM node for a provider."""
     p = PROVIDERS[provider]
     node = p['node']
     key = '${' + p['key_env'] + '}'
@@ -76,13 +76,12 @@ def llm_component(provider: str, model: str | None, profiles: dict[str, Any] | N
                 'modelTotalTokens': 32768,
             },
         }
+    elif model:
+        # An explicit model id runs on the node's "custom" profile.
+        cfg = {'profile': 'custom', 'custom': {'model': model, 'apikey': key, 'modelTotalTokens': 128000}}
     else:
-        known = (profiles or {}).get(node) or {}
-        if model and model not in (known.get('ids') or []):
-            cfg = {'profile': 'custom', 'custom': {'model': model, 'apikey': key}}
-        else:
-            profile = model or known.get('default') or p['default_profile']
-            cfg = {'profile': profile, profile: {'apikey': key}}
+        # No profile: the engine applies the node's default model.
+        cfg = {'apikey': key}
     cfg['parameters'] = {}
     return {'id': 'llm_1', 'provider': node, 'config': cfg}
 
@@ -180,7 +179,8 @@ def summarize(params: dict[str, Any], llm: dict[str, Any]) -> dict[str, Any]:
     return _finish('summarize', comps)
 
 
-FIELD_TYPES = ('text', 'number', 'integer', 'float', 'boolean', 'date', 'datetime', 'time', 'email', 'url', 'phone', 'json')
+FIELD_TYPES = ('text', 'decimal', 'int', 'date', 'time', 'datetime', 'timestamp', 'binary', 'json', 'html', 'url', 'email', 'phone', 'ipv4', 'ipv6', 'uuid', 'guid')
+TYPE_ALIASES = {'number': 'decimal', 'float': 'decimal', 'integer': 'int', 'string': 'text', 'str': 'text'}
 
 
 def _fields(raw: Any) -> list[dict[str, str]]:
@@ -209,7 +209,13 @@ def _fields(raw: Any) -> list[dict[str, str]]:
         name = str(f.get('name') or f.get('column') or '').strip()
         if not name:
             raise PipelineError('Each field needs a "name".')
-        out.append({'column': name, 'type': str(f.get('type') or 'text'), 'defval': str(f.get('default', f.get('defval', '')) or '')})
+        if not 2 <= len(name) <= 32:
+            raise PipelineError(f'Field name {name!r} must be 2 to 32 characters.')
+        ftype = str(f.get('type') or 'text').strip().lower()
+        ftype = TYPE_ALIASES.get(ftype, ftype)
+        if ftype not in FIELD_TYPES:
+            raise PipelineError(f'Field type {ftype!r} is not supported. Use one of: {", ".join(FIELD_TYPES)}.')
+        out.append({'column': name, 'type': ftype, 'defval': str(f.get('default', f.get('defval', '')) or '')})
     return out
 
 
@@ -325,7 +331,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         'needsLlm': True,
         'input': 'document',
         'params': {
-            'fields': 'Required. Column names, e.g. ["invoice_number", "total"], or objects {"name", "type", "default"}.',
+            'fields': 'Required. Column names, e.g. ["invoice_number", "total"], or objects {"name", "type", "default"}. Types: text, decimal, int, date, datetime, email, url, phone, json and more.',
             **DOC_PARAMS,
             **LLM_PARAMS,
         },
@@ -358,13 +364,13 @@ CATALOG: dict[str, dict[str, Any]] = {
 PARAM_NAMES = sorted({k for c in CATALOG.values() for k in c['params']})
 
 
-def build(name: str, params: dict[str, Any], env: dict[str, str], profiles: dict[str, Any] | None = None) -> dict[str, Any]:
+def build(name: str, params: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
     entry = CATALOG[name]
     llm = None
     if entry['needsLlm']:
         provider = resolve_provider(params.get('provider'), env)
         model = str(params.get('model') or env.get(DEFAULT_MODEL_ENV) or '').strip() or None
-        llm = llm_component(provider, model, profiles)
+        llm = llm_component(provider, model)
     return entry['build'](params, llm)
 
 

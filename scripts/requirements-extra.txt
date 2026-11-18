@@ -1,0 +1,2 @@
+# Needed by the summarization node at run time; engine 3.6.0 does not install it when the node loads.
+langchain-text-splitters>=1.1.3
