@@ -14,6 +14,9 @@ docker run -d --name rr-actor --network host \
 trap 'kill $MOCK_PID 2>/dev/null || true; echo "---- container logs ----"; docker logs rr-actor 2>&1 | grep -v "GET /version" | tail -120 | cut -c1-400' EXIT
 RC=0; python3 tests/integration_check.py || RC=$?
 
+echo "== MEMORY with both document pipelines and three LLM pipelines running"
+docker stats --no-stream --format '{{.Name}}  mem={{.MemUsage}}  cpu={{.CPUPerc}}' rr-actor || true
+
 echo "== IMAGE SIZE REPORT"
 docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep -i rocketride || true
 echo "-- layers of $IMAGE"; docker history --format '{{.Size}}\t{{.CreatedBy}}' "$IMAGE" | cut -c1-150 | head -8
