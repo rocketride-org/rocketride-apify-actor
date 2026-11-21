@@ -12,6 +12,7 @@
   "dockerfile": "../Dockerfile",
   "dockerContextDir": "../",
   "readme": "../README.md",
+  "defaultMemoryMbytes": 4096,
   "minMemoryMbytes": 4096,
   "meta": {
     "templateId": "python-standby",

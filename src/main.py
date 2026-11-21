@@ -119,6 +119,10 @@ def build_engine_env(actor_input: dict[str, Any]) -> dict[str, str]:
         env[name] = str(value)
     env['ROCKETRIDE_APIKEY'] = S.engine_key
     env['ROCKETRIDE_URI'] = f'ws://127.0.0.1:{ENGINE_PORT}'
+    # Nodes outside the ready-made pipelines install their packages on first use. uv's cache would keep a
+    # second copy of each one, and an Actor run's disk is small: without this, a few agent frameworks fill
+    # it and the next install fails with "No space left on device".
+    env.setdefault('UV_NO_CACHE', '1')
     configured = sorted(k for k in env if k.startswith('ROCKETRIDE_') and k.endswith(('_KEY', '_TOKEN')) and k != 'ROCKETRIDE_APIKEY')
     log.info('Provider credentials configured (names only): %s', ', '.join(configured) or 'none')
     if env.get(pipelines.COMPAT_BASE_URL_ENV) and not env.get(pipelines.PROVIDERS['openai-compatible']['key_env']):
