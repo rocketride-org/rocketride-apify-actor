@@ -116,6 +116,39 @@ try:
     served = c.get('/pipelines/doc-to-text').json()['pipeline']
     r = c.post('/run', json={'pipeline': served, 'text': 'while warm'}).json()
     check('/run accepts a GET /pipelines definition while that pipeline is warm', 'while warm' in (r.get('text') or ''), r)
+    # Chat-source pipelines (most of the examples in the RocketRide repos) only read questions.
+    chat = {'components': [
+        {'id': 'chat_1', 'provider': 'chat', 'config': {'mode': 'Source', 'type': 'chat', 'parameters': {}}},
+        {'id': 'llm_1', 'provider': 'llm_anthropic', 'config': {'apikey': '${ROCKETRIDE_ANTHROPIC_KEY}'}, 'input': [{'lane': 'questions', 'from': 'chat_1'}]},
+        {'id': 'response_answers_1', 'provider': 'response_answers', 'config': {}, 'input': [{'lane': 'answers', 'from': 'llm_1'}]}],
+        'source': 'chat_1', 'version': 1}
+    r = c.post('/run', json={'pipeline': chat, 'question': 'What is 2+2?'}).json()
+    check('/run sends "question" to a chat pipeline', r.get('answer') == 'CHAT via llm_anthropic: What is 2+2?', r)
+    r = c.post('/run', json={'pipeline': chat, 'text': 'plain text to a chat pipeline'}).json()
+    check('/run treats "text" as the question for a chat source', r.get('answer') == 'CHAT via llm_anthropic: plain text to a chat pipeline', r)
+    r = c.post('/run', json={'pipeline': chat, 'question': {'questions': [{'text': 'full object'}], 'expectJson': True}}).json()
+    check('/run accepts a full Question object', r.get('answer') == 'CHAT via llm_anthropic: full object', r)
+    r = c.post('/run', json={'pipeline': chat, 'question': 'TRIGGER_LLM_ERROR'})
+    check('/run reports an LLM failure as a 502', r.status_code == 502 and 'LLM error' in r.json().get('error', ''), r.text[:400])
+    both = {**chat, 'components': [{'id': 'webhook_1', 'provider': 'webhook', 'config': {'mode': 'Source', 'type': 'webhook'}}] + chat['components']}
+    del both['source']
+    r = c.post('/run', json={'pipeline': both, 'question': 'which source?'}).json()
+    check('/run picks the chat source of a two-source pipeline for a question', r.get('answer') == 'CHAT via llm_anthropic: which source?', r)
+    r = c.post('/run', json={'pipeline': both, 'text': 'a document'}).json()
+    check('/run picks the other source for text', r.get('answer') == 'ANSWER via llm_anthropic: a document', r)
+    r = c.post('/run', json={'pipeline': both, 'source': 'chat_1', 'text': 'named source'}).json()
+    check('/run honours an explicit "source"', r.get('answer') == 'CHAT via llm_anthropic: named source', r)
+    r = c.post('/run', json={'pipeline': pipe, 'text': 'TRIGGER_NO_OUTPUT'}).json()
+    check('/run warns when the pipeline returns nothing', 'no output' in r.get('warning', ''), r)
+    r = c.post('/run', json={'pipeline': pipe, 'text': 'TRIGGER_NODE_ERROR'})
+    check('/run reports a node failure as a 502', r.status_code == 502 and r.json()['error'] == 'node exploded', r.text[:400])
+    check('/run tasks are stopped afterwards', not any('chat' in t for t in c.get('/engine/_tasks').json()['pipelines']), c.get('/engine/_tasks').json())
+    before = c.get('/engine/_tasks').json()['count']
+    tok = c.post('/engine/task', json={**pipe, 'project_id': 'passthrough-test'}).json()['data']['token']
+    r = c.post('/engine/webhook', params={'token': tok}, content=b'via passthrough', headers={'Content-Type': 'text/plain'})
+    check('engine passthrough keeps an engine task token', r.status_code == 200 and 'via passthrough' in r.text, r.text[:400])
+    c.request('DELETE', '/engine/task', params={'token': tok})
+    check('engine passthrough can stop that task by token', c.get('/engine/_tasks').json()['count'] == before, c.get('/engine/_tasks').json())
     r = c.post('/mcp?token=apify_api_FAKE', json={'jsonrpc': '2.0', 'id': 1, 'method': 'initialize'})
     check('MCP initialize proxied with engine key', r.status_code == 200 and r.json()['result']['method'] == 'initialize', r.text)
     r = c.post('/mcp', json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}, headers={'Accept': 'application/json, text/event-stream'})

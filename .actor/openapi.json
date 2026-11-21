@@ -325,7 +325,7 @@
     },
     "/run": {
       "post": {
-        "summary": "Run any webhook-source RocketRide pipeline once",
+        "summary": "Run any RocketRide pipeline once",
         "requestBody": {
           "required": true,
           "content": {
@@ -338,17 +338,34 @@
                 "properties": {
                   "pipeline": {
                     "type": "object",
-                    "description": "Contents of a .pipe file with a webhook source"
+                    "description": "Contents of a .pipe file"
                   },
                   "text": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Text to send. For a chat source, the question"
                   },
                   "url": {
                     "type": "string",
-                    "format": "uri"
+                    "format": "uri",
+                    "description": "File to download and send"
                   },
                   "filename": {
                     "type": "string"
+                  },
+                  "question": {
+                    "description": "Question for a chat source: a string, or a full RocketRide Question object",
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "description": "Id of the source component to send to, for pipelines with several sources"
                   }
                 }
               }
@@ -357,15 +374,16 @@
         },
         "responses": {
           "200": {
-            "description": "Pipeline output"
+            "description": "Pipeline output: text, answer and data where present, the raw result, and a warning if the pipeline returned nothing"
           },
           "400": {
             "description": "Bad input"
           },
           "502": {
-            "description": "Engine error"
+            "description": "Engine, node or LLM error"
           }
-        }
+        },
+        "description": "Starts the pipeline, sends one input, returns the output and stops it. Webhook and dropper sources take \"text\" or \"url\"; chat sources take \"question\" (plain \"text\" is treated as the question). For a pipeline with several sources, name one in \"source\", or the chat source is used for a question and the other source for text or a URL."
       }
     },
     "/mcp": {
