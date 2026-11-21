@@ -23,6 +23,8 @@ async def task(req):
     if not authed(req): return JSONResponse({'status': 'Error', 'error': {'message': 'bad key'}}, 401)
     if req.method == 'POST':
         pipe = await req.json(); assert 'components' in pipe
+        if any(t.get('project_id') == pipe.get('project_id') for t in TASKS.values()):  # as the real engine does
+            return JSONResponse({'status': 'Error', 'error': {'message': 'Pipeline is already running.'}})
         tok = str(uuid.uuid4()); TASKS[tok] = pipe
         return JSONResponse({'status': 'OK', 'data': {'token': tok}})
     TASKS.pop(req.query_params.get('token'), None)

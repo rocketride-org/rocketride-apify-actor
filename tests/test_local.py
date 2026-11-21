@@ -112,6 +112,10 @@ try:
 
     pipe = __import__('json').loads((ROOT / 'pipelines/doc-to-text.pipe').read_text())
     r = c.post('/run', json={'pipeline': pipe, 'text': 'adhoc'}).json(); check('/run ad-hoc', 'adhoc' in (r.get('text') or ''), r)
+    c.post('/pipelines/doc-to-text', json={'text': 'warm'})
+    served = c.get('/pipelines/doc-to-text').json()['pipeline']
+    r = c.post('/run', json={'pipeline': served, 'text': 'while warm'}).json()
+    check('/run accepts a GET /pipelines definition while that pipeline is warm', 'while warm' in (r.get('text') or ''), r)
     r = c.post('/mcp?token=apify_api_FAKE', json={'jsonrpc': '2.0', 'id': 1, 'method': 'initialize'})
     check('MCP initialize proxied with engine key', r.status_code == 200 and r.json()['result']['method'] == 'initialize', r.text)
     r = c.post('/mcp', json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}, headers={'Accept': 'application/json, text/event-stream'})

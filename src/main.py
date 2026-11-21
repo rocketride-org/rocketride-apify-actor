@@ -27,6 +27,7 @@ import secrets
 import signal
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -576,6 +577,9 @@ async def run_adhoc(request: Request) -> Response:
         pipeline = data.get('pipeline') if isinstance(data, dict) else None
         if not isinstance(pipeline, dict) or 'components' not in pipeline:
             raise ValueError('Body must be JSON with a "pipeline" object (a .pipe file) plus "text" or "url".')
+        # The engine keys tasks by project_id, so a definition taken from GET /pipelines/{name} would clash
+        # with that pipeline's warm task ("Pipeline is already running"). A one-shot run gets its own.
+        pipeline = {**pipeline, 'project_id': str(uuid.uuid4())}
         if data.get('text') is not None:
             body, ctype, filename = str(data['text']).encode(), 'text/plain', data.get('filename') or 'input.txt'
         elif data.get('url'):
