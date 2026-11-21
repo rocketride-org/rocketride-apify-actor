@@ -144,13 +144,13 @@ def _as_int(value: Any, default: int, low: int, high: int, name: str) -> int:
 
 
 def doc_to_text(params: dict[str, Any], llm: dict[str, Any] | None) -> dict[str, Any]:
-    comps, text = _ingest(ocr=True)
+    comps, text = _ingest(_as_bool(params.get('ocr'), False))
     comps.append({'id': 'response_text_1', 'provider': 'response_text', 'config': {'laneName': 'text'}, 'input': text})
     return _finish('doc-to-text', comps)
 
 
 def redact_pii(params: dict[str, Any], llm: dict[str, Any] | None) -> dict[str, Any]:
-    comps, text = _ingest(ocr=True)
+    comps, text = _ingest(_as_bool(params.get('ocr'), False))
     comps.append({'id': 'ner_1', 'provider': 'ner', 'config': {}, 'input': text})
     comps.append({'id': 'anonymize_text_1', 'provider': 'anonymize_text', 'config': {}, 'input': [{'lane': 'text', 'from': 'ner_1'}]})
     comps.append(_response('text', 'anonymize_text_1'))
@@ -291,15 +291,18 @@ LLM_PARAMS = {
     'provider': 'openai | anthropic | gemini | openai-compatible. Default: the first one you configured.',
     'model': 'Model id for that provider. Default: the provider node\'s default model.',
 }
-DOC_PARAMS = {'ocr': 'true to also OCR scanned pages and images (slower). Default: false.'}
+DOC_PARAMS = {
+    'ocr': 'true to also OCR scanned pages and embedded images (slower, and image-heavy files can need 8 GB of memory). '
+           'Default: false, except for image uploads, which are always OCRed.',
+}
 
 CATALOG: dict[str, dict[str, Any]] = {
     'doc-to-text': {
         'title': 'Document to text',
-        'description': 'Any document (PDF, DOCX, PPTX, XLSX, HTML, images, ...) to clean text, with OCR for embedded images.',
+        'description': 'Any document (PDF, DOCX, PPTX, XLSX, HTML, images, ...) to clean text. Add ocr=true for scanned pages and embedded images.',
         'needsLlm': False,
         'input': 'document',
-        'params': {},
+        'params': {**DOC_PARAMS},
         'build': doc_to_text,
     },
     'redact-pii': {
@@ -307,7 +310,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         'description': 'Parse a document, detect named entities and return the text with personal data masked.',
         'needsLlm': False,
         'input': 'document',
-        'params': {},
+        'params': {**DOC_PARAMS},
         'build': redact_pii,
     },
     'summarize': {

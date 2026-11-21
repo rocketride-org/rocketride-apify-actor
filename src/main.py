@@ -246,6 +246,15 @@ async def warm_token(name: str, pipeline: dict, refresh: bool = False) -> str:
         return token
 
 
+async def drop_warm(name: str, pipeline: dict) -> None:
+    """Stop and forget this pipeline's warm task, so the next request starts a fresh one."""
+    assert S.warm_lock
+    key = pipelines.cache_key(name, pipeline)
+    async with S.warm_lock:
+        if key in S.warm:
+            await stop_task(S.warm.pop(key))
+
+
 def lanes(result: Any) -> dict[str, list]:
     """Group a webhook result's output by lane (text, answers, ...) across objects."""
     out: dict[str, list] = {}
@@ -280,6 +289,25 @@ def object_errors(result: Any) -> list[str]:
             if isinstance(a, str) and a.startswith(LLM_ERROR_PREFIXES):
                 errs.append(a.replace('**', '').strip())
     return errs
+
+
+# Errors the engine reports when the task itself is gone: 'Connection closed' when it dies mid-request
+# (for example, killed for running out of memory), 'Stopped' on every request after that.
+TASK_DIED_ERRORS = ('Stopped', 'Connection closed')
+TASK_DIED_HINT = ('The pipeline stopped while processing this document. This usually means the server ran out of '
+                  'memory: OCR of large, image-heavy files can need 8 GB. Retry without "ocr", or raise the memory '
+                  'in your task\'s Server settings. The pipeline restarts on the next request.')
+
+
+def task_died(result: Any) -> str | None:
+    """The engine error showing the pipeline's task is no longer running, if the result has one."""
+    objects = result.get('objects') if isinstance(result, dict) else None
+    for obj in (objects or {}).values():
+        err = obj.get('error') if isinstance(obj, dict) else None
+        message = err.get('message') if isinstance(err, dict) else err
+        if message in TASK_DIED_ERRORS:
+            return message
+    return None
 
 
 def answer_text(value: Any) -> str:
@@ -489,6 +517,8 @@ async def run_featured(request: Request) -> Response:
         return resp
     try:
         body, ctype, filename, params = await read_request(request, CATALOG[name]['input'])
+        if 'ocr' in CATALOG[name]['params'] and 'ocr' not in params and ctype.startswith('image/'):
+            params['ocr'] = True  # an image has no text without OCR
         pipeline = pipelines.build(name, params, S.env)
     except (ValueError, httpx.HTTPError) as e:  # PipelineError is a ValueError
         return JSONResponse({'error': str(e)}, status_code=400)
@@ -501,6 +531,14 @@ async def run_featured(request: Request) -> Response:
         except (EngineError, httpx.HTTPError):
             token = await warm_token(name, pipeline, refresh=True)  # task may have been recycled; retry once
             result = await send_to_task(token, body, ctype, filename)
+        else:
+            if task_died(result) == 'Stopped':  # the warm task died on an earlier request; start a fresh one
+                log.warning('Pipeline %s had stopped; restarting it.', name)
+                token = await warm_token(name, pipeline, refresh=True)
+                result = await send_to_task(token, body, ctype, filename)
+        if task_died(result):  # died on this request: never hand the dead task to the next one
+            log.warning('Pipeline %s stopped while processing %s (%d bytes); it restarts on the next request.', name, filename, len(body))
+            await drop_warm(name, pipeline)
     except EngineError as e:
         return JSONResponse({'error': str(e), 'engine': e.payload}, status_code=502)
     except httpx.HTTPError as e:
@@ -519,6 +557,8 @@ async def run_featured(request: Request) -> Response:
         for k in ('answer', 'data'):
             out.pop(k, None)
         out['error'] = errors[0]
+        if task_died(result):
+            out['hint'] = TASK_DIED_HINT
         out['result'] = result
         return JSONResponse(out, status_code=502)
     if request.query_params.get('save') in ('1', 'true'):
@@ -645,8 +685,10 @@ async def prebake() -> int:
     samples: list[tuple[bytes | None, str, str]] = [(doc, 'text/plain', 'warmup.txt'), (None, 'image/png', 'warmup.png')]
     compat = {'provider': 'openai-compatible'}
     jobs: list[tuple[str, dict[str, Any], list[tuple[bytes | None, str, str]]]] = [
-        ('doc-to-text', {}, samples),
-        ('redact-pii', {}, samples),
+        ('doc-to-text', {}, samples[:1]),
+        ('doc-to-text', {'ocr': True}, samples[1:]),  # the image sample pulls the OCR models into the image
+        ('redact-pii', {}, samples[:1]),
+        ('redact-pii', {'ocr': True}, samples[1:]),
         ('summarize', dict(compat), samples[:1]),
         ('extract-data', dict(compat, fields=['invoice_number', 'total']), samples[:1]),
         ('ask', dict(compat, question='What is the total due?'), samples[:1]),

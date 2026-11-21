@@ -7,6 +7,11 @@ from starlette.routing import Route
 
 KEY = os.environ['ROCKETRIDE_APIKEY']
 TASKS = {}
+DEAD = set()  # tasks the real engine would report as gone (crashed or killed)
+
+def died(message, line):
+    obj = {'status': 'Error', 'error': {'message': message, 'file': 'data.py', 'lineno': line}}
+    return JSONResponse({'status': 'OK', 'data': {'objectsRequested': 1, 'objectsCompleted': 0, 'objects': {'body': obj}}})
 
 def authed(req):
     return req.headers.get('authorization') == f'Bearer {KEY}'
@@ -27,7 +32,11 @@ async def webhook(req):
     if not authed(req): return JSONResponse({'status': 'Error', 'error': {'message': 'bad key'}}, 401)
     tok = req.query_params.get('token')
     if tok not in TASKS: return JSONResponse({'status': 'Error', 'error': {'message': 'no task'}})
+    if tok in DEAD: return died('Stopped', 247)
     body = (await req.body()).decode('utf-8', 'replace')
+    if 'TRIGGER_TASK_DIES' in body:  # e.g. the OCR worker is killed for running out of memory
+        DEAD.add(tok)
+        return died('Connection closed', 342)
     providers = [c['provider'] for c in TASKS[tok]['components']]
     obj = {'name': 'x', 'status': 'OK'}
     if 'TRIGGER_LLM_ERROR' in body:
@@ -47,6 +56,10 @@ async def webhook(req):
 async def tasks(req):
     return JSONResponse({'count': len(TASKS), 'pipelines': [[c['provider'] for c in t['components']] for t in TASKS.values()]})
 
+async def kill(req):
+    DEAD.update(TASKS)  # every running task stops behind the wrapper's back
+    return JSONResponse({'killed': len(TASKS)})
+
 async def mcp(req):
     if not authed(req): return JSONResponse({'error': 'unauthorized'}, 401)
     msg = await req.json()
@@ -58,5 +71,6 @@ async def mcp(req):
     return JSONResponse(res)
 
 app = Starlette(routes=[Route('/version', version), Route('/task', task, methods=['POST', 'DELETE']),
-    Route('/webhook', webhook, methods=['POST']), Route('/_tasks', tasks), Route('/mcp', mcp, methods=['POST'])])
+    Route('/webhook', webhook, methods=['POST']), Route('/_tasks', tasks), Route('/_kill', kill, methods=['POST']),
+    Route('/mcp', mcp, methods=['POST'])])
 uvicorn.run(app, host='127.0.0.1', port=int(os.environ.get('ROCKETRIDE_ENGINE_PORT', '5565')), log_level='warning')
