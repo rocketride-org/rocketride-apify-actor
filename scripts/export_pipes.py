@@ -15,8 +15,8 @@ import pipelines  # noqa: E402
 
 ENV = {'ROCKETRIDE_OPENAI_KEY': 'set'}
 EXAMPLES = {
-    'doc-to-text': {},
-    'redact-pii': {},
+    'doc-to-text': {'ocr': True},
+    'redact-pii': {'ocr': True},
     'summarize': {},
     'extract-data': {'fields': ['invoice_number', {'name': 'total', 'type': 'decimal'}, {'name': 'due_date', 'type': 'date'}]},
     'ask': {'question': 'What is the total amount due, and when?'},

@@ -41,7 +41,7 @@ Point Claude, Cursor, ChatGPT, n8n, LangChain or your own code at it and you get
 
 | Pipeline | What you get | LLM key |
 | --- | --- | :---: |
-| 📄 `doc-to-text` | Clean text from PDF, DOCX, PPTX, XLSX, HTML and images, with OCR | Not needed |
+| 📄 `doc-to-text` | Clean text from PDF, DOCX, PPTX, XLSX, HTML and images, with optional OCR | Not needed |
 | 🛡️ `redact-pii` | The same text with names, organizations, places and other personal details masked | Not needed |
 | 📝 `summarize` | A summary, key points and named entities | Required |
 | 🧾 `extract-data` | The fields you name, returned as JSON rows | Required |
@@ -61,8 +61,9 @@ The engine validates every pipeline before it runs, so your agent gets precise e
 ## Quickstart
 
 1. **Get your token.** Copy your Apify API token from [Settings → API & Integrations](https://console.apify.com/settings/integrations).
-2. **Add an LLM key (optional).** Only the LLM pipelines need one. Add it in the Actor's **Input** tab.
-3. **Send a request.** Every request needs `Authorization: Bearer <APIFY_TOKEN>`. The first one starts your server; later ones hit the warm engine.
+2. **Send a request.** Every request needs `Authorization: Bearer <APIFY_TOKEN>`. The first one starts your server; later ones hit the warm engine.
+
+The document pipelines and the MCP server work right away. To use the LLM pipelines, [add your model key](#input-bring-your-own-model) first.
 
 ```bash
 curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/redact-pii" \
@@ -179,7 +180,7 @@ curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/agent" \
 | --- | --- | --- |
 | `provider` | LLM pipelines | `openai`, `anthropic`, `gemini` or `openai-compatible`. Default: the first one you configured |
 | `model` | LLM pipelines | Model id at that provider, such as `gpt-4o-mini`. Default: the node's default model |
-| `ocr` | summarize, extract-data, ask | `true` to OCR scanned pages and images. Default: `false` |
+| `ocr` | All but agent | `true` to OCR scanned pages and embedded images. Default: `false`, except image uploads, which are always OCRed |
 | `question` | ask, agent | Required |
 | `fields` | extract-data | Required. Column names, or objects with `name`, `type`, `default` |
 | `summaryWords`, `keyPoints`, `entities`, `chunks` | summarize | Length and sections of the summary |
@@ -188,6 +189,14 @@ curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/agent" \
 ## Input: bring your own model
 
 All input is optional. The document pipelines, and the MCP tools for building and validating pipelines, work with no keys.
+
+Your server reads its input from a **task**, not from the Actor's own URL. To add a key:
+
+1. Open the Actor in Apify Console, fill in your key in the **Input** tab, and select **Save as a new task**.
+2. In the task's **Settings → Server** section, make sure the input is passed to the server.
+3. Send requests to the task's URL instead, shown in its **Server** tab: `https://<username>--<task-name>.apify.actor`.
+
+The same task is where you change the server's memory and idle timeout.
 
 | Input field | Pipelines see it as |
 | --- | --- |
@@ -207,6 +216,7 @@ The Actor is **free**. You pay Apify for platform usage while your server runs, 
 - **Private server.** Each user gets a single-tenant server in their own Apify account.
 - **Starts on demand.** The server starts on the first request and stops after the idle timeout you set in **Settings → Server**.
 - **4 GB of memory.** This is the minimum and the recommended setting. With all six pipelines loaded, the server used about 3 GB in our tests.
+- **8 GB for heavy OCR.** With `ocr=true`, OCR of a 15-page, figure-heavy PDF peaked at about 3.6 GB on its own, more than a 4 GB server has to spare. Raise the memory in your task's Server settings if you OCR large files.
 - **Warm requests are fast.** A short text document takes a fraction of a second, plus LLM time. OCR and entity detection take longer.
 - **New pipelines take a few seconds to start.** LLM pipelines are built from your options. The three most recent stay running, so repeating a request with the same options skips the start.
 - **The first start on a new machine is slow.** Apify downloads the image (engine plus OCR and entity models) once, which can take a few minutes. After that the server boots in seconds.
@@ -244,6 +254,7 @@ Yes. The engine is [MIT-licensed on GitHub](https://github.com/rocketride-org/ro
 - **CPU only.** Nodes that need a GPU will be slow or will not work here.
 - **PII detection is model-based.** It reliably masked names, organizations and places in our tests, but it can miss items such as the domain of an email address. Review the output before relying on it for compliance.
 - **`send_files` reads from the container.** The MCP `send_files` tool and upload links read from the Actor's container, not your machine. To send your own files, use `send_data`, a pipeline endpoint, or `/run` with a URL.
+- **Out-of-memory failures.** If a pipeline runs out of memory, the request fails with a `hint` that explains why, and the pipeline restarts on the next request.
 - **Restarts clear running pipelines.** They live in the server's memory. Save results with `?save=true`.
 - **Extra nodes install on first use.** Nodes outside the ready-made pipelines install their dependencies the first time they run, so that run is slower.
 

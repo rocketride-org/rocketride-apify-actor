@@ -60,6 +60,21 @@ try:
     check('redact-pii raw upload', 'application/pdf' in (r.get('text') or '') and 'ner' in r['text'] and r['filename'] == 'a.pdf', r)
     r = c.post('/pipelines/doc-to-text', files={'file': ('n.txt', b'multi part', 'text/plain')}).json()
     check('multipart upload', 'multi part' in (r.get('text') or ''), r)
+    r = c.post('/pipelines/doc-to-text', json={'text': 'no ocr please'}).json()
+    check('doc-to-text skips OCR by default', ',ocr,' not in (r.get('text') or '') and 'parse' in r['text'], r)
+    r = c.post('/pipelines/doc-to-text', json={'text': 'scan', 'ocr': True}).json()
+    check('doc-to-text ocr=true adds the OCR node', ',ocr,' in (r.get('text') or ''), r)
+    r = c.post('/pipelines/redact-pii', content=b'\x89PNG fake', headers={'Content-Type': 'image/png'}).json()
+    check('image uploads are OCRed automatically', ',ocr,' in (r.get('text') or '') and 'image/png' in r['text'], r)
+
+    # A pipeline that dies (the real engine: OCR worker killed for running out of memory) must not stay broken.
+    r = c.post('/pipelines/doc-to-text', json={'text': 'TRIGGER_TASK_DIES'})
+    check('pipeline dying mid-request is a 502 with a hint', r.status_code == 502 and r.json()['error'] == 'Connection closed' and 'memory' in r.json().get('hint', ''), r.text[:400])
+    r = c.post('/pipelines/doc-to-text', json={'text': 'after the crash'})
+    check('the next request gets a fresh pipeline', r.status_code == 200 and 'after the crash' in r.json().get('text', ''), r.text[:400])
+    c.post('/engine/_kill')
+    r = c.post('/pipelines/redact-pii', json={'text': 'after an outside stop'})
+    check('a pipeline stopped behind our back is restarted and the request retried', r.status_code == 200 and 'after an outside stop' in r.json().get('text', ''), r.text[:400])
     check('unknown pipeline 404', c.post('/pipelines/nope', json={'text': 'x'}).status_code == 404)
     check('empty body 400', c.post('/pipelines/doc-to-text', content=b'').status_code == 400)
 
@@ -89,13 +104,18 @@ try:
     check('node failure is a 502', r.status_code == 502 and r.json()['error'] == 'node exploded', r.text)
     for i in range(5):
         c.post('/pipelines/ask', json={'text': 'd', 'question': f'question {i}'})
-    n = c.get('/engine/_tasks').json()['count']
-    check('at most 3 LLM pipelines stay running', n <= 5, n)
+    running = c.get('/engine/_tasks').json()
+    n, n_llm = running['count'], sum(any(p.startswith('llm_') for p in t) for t in running['pipelines'])
+    check('at most 3 LLM pipelines stay running', n_llm <= 3, running)
     again = c.post('/pipelines/ask', json={'text': 'd', 'question': 'question 4'}).json()
     check('a repeated request reuses the running pipeline', c.get('/engine/_tasks').json()['count'] == n and again.get('answer'), again)
 
     pipe = __import__('json').loads((ROOT / 'pipelines/doc-to-text.pipe').read_text())
     r = c.post('/run', json={'pipeline': pipe, 'text': 'adhoc'}).json(); check('/run ad-hoc', 'adhoc' in (r.get('text') or ''), r)
+    c.post('/pipelines/doc-to-text', json={'text': 'warm'})
+    served = c.get('/pipelines/doc-to-text').json()['pipeline']
+    r = c.post('/run', json={'pipeline': served, 'text': 'while warm'}).json()
+    check('/run accepts a GET /pipelines definition while that pipeline is warm', 'while warm' in (r.get('text') or ''), r)
     r = c.post('/mcp?token=apify_api_FAKE', json={'jsonrpc': '2.0', 'id': 1, 'method': 'initialize'})
     check('MCP initialize proxied with engine key', r.status_code == 200 and r.json()['result']['method'] == 'initialize', r.text)
     r = c.post('/mcp', json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}, headers={'Accept': 'application/json, text/event-stream'})
