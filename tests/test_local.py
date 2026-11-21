@@ -27,7 +27,7 @@ env = dict(os.environ,
     ROCKETRIDE_ENGINE_CMD=f'{sys.executable} {ROOT}/tests/mock_engine.py', ROCKETRIDE_HOME=str(ROOT),
     APIFY_INPUT_SECRETS_PRIVATE_KEY_FILE=base64.b64encode(pem).decode(),
     APIFY_INPUT_SECRETS_PRIVATE_KEY_PASSPHRASE='pass',
-    ROCKETRIDE_VERIFY_CALLER='1', APIFY_API_BASE_URL='http://127.0.0.1:5599', APIFY_USER_ID='owner1',
+    ROCKETRIDE_VERIFY_CALLER='1', APIFY_USER_ID='owner1',
     ACTOR_INPUT_JSON=json.dumps({'openaiApiKey': apify_encrypt('sk-test-123', priv.public_key()),
                                  'additionalEnv': {'ROCKETRIDE_APIKEY': 'hijack', 'ROCKETRIDE_QDRANT_HOST': 'q'}}))
 proc = subprocess.Popen([sys.executable, str(ROOT / 'src/main.py')], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -41,7 +41,7 @@ try:
         try:
             if httpx.get(base + '/', headers={'x-apify-container-server-readiness-probe': '1'}).text == 'OK': break
         except httpx.HTTPError: time.sleep(0.2)
-    c = httpx.Client(base_url=base, timeout=30, headers={'Authorization': 'Bearer apify_api_FAKE'})
+    c = httpx.Client(base_url=base, timeout=30, headers={'Authorization': 'Bearer apify_api_FAKE', 'X-Apify-User-ID': 'owner1'})  # as Apify's gateway forwards it
     check('readiness probe returns OK', c.get('/', headers={'x-apify-container-server-readiness-probe': '1'}).text == 'OK')
     for _ in range(50):
         if c.get('/health').status_code == 200: break
@@ -156,18 +156,17 @@ try:
     check('MCP SSE stream proxied', r.headers['content-type'].startswith('text/event-stream') and 'tools/list' in r.text, r.text)
     check('engine passthrough', c.get('/engine/version').json()['version'] == 'mock-3.6.0')
 
-    # The server checks the Apify token itself, so code inside the container (a pipeline's HTTP tool)
-    # cannot skip Apify's gateway by calling this port directly.
+    # Apify's gateway removes the token and adds X-Apify-User-ID. The server requires the run owner's ID,
+    # so code inside the container (a pipeline's HTTP tool) cannot just call this port directly.
     raw = httpx.Client(base_url=base, timeout=30)
-    check('no token is a 401', raw.get('/pipelines').status_code == 401)
-    check('no token on /engine is a 401', raw.get('/engine/version').status_code == 401)
-    check('no token on /run is a 401', raw.post('/run', json={'pipeline': pipe, 'text': 'x'}).status_code == 401)
-    check('an invalid token is a 401', raw.get('/pipelines', headers={'Authorization': 'Bearer nope'}).status_code == 401)
-    check("another account's token is a 401", raw.get('/pipelines', headers={'Authorization': 'Bearer apify_api_OTHER'}).status_code == 401)
-    check('a scoped token is accepted', raw.get('/pipelines', headers={'Authorization': 'Bearer apify_api_SCOPED'}).status_code == 200)
-    check('the token works in ?token=', raw.get('/pipelines', params={'token': 'apify_api_FAKE'}).status_code == 200)
-    check('an engine task token alone is not an Apify token', raw.get('/engine/version', params={'token': 'tk_123'}).status_code == 401)
-    check('the readiness probe needs no token', raw.get('/', headers={'x-apify-container-server-readiness-probe': '1'}).text == 'OK')
+    check('no account ID is a 401', raw.get('/pipelines').status_code == 401)
+    check('no account ID on /engine is a 401', raw.get('/engine/version').status_code == 401)
+    check('no account ID on /run is a 401', raw.post('/run', json={'pipeline': pipe, 'text': 'x'}).status_code == 401)
+    check('no account ID on /mcp is a 401', raw.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'}).status_code == 401)
+    check("another account's ID is a 401", raw.get('/pipelines', headers={'X-Apify-User-ID': 'someone-else'}).status_code == 401)
+    check('a token without the gateway header is a 401', raw.get('/pipelines', headers={'Authorization': 'Bearer apify_api_FAKE'}).status_code == 401)
+    check("the owner's ID is accepted", raw.get('/pipelines', headers={'X-Apify-User-ID': 'owner1'}).status_code == 200)
+    check('the readiness probe needs no account ID', raw.get('/', headers={'x-apify-container-server-readiness-probe': '1'}).text == 'OK')
     for target in ['http://127.0.0.1:5599/version', 'http://localhost:4399/pipelines', 'http://169.254.169.254/', 'http://[::1]:4399/']:
         r = c.post('/pipelines/doc-to-text', json={'url': target})
         check(f'url to an internal address is refused: {target}', r.status_code == 400 and 'internal' in r.json().get('error', ''), r.text[:300])

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-import hashlib
 import ipaddress
 import json
 import logging
@@ -31,7 +30,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import parse_qsl, urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -83,7 +82,6 @@ class State:
     env: dict[str, str] = {}
     warm: 'OrderedDict[str, str]' = None  # cache key -> task token
     warm_lock: asyncio.Lock | None = None
-    verified: dict[str, float] = {}  # sha256 of a checked Apify token -> trusted until
     started_at = time.time()
 
 
@@ -760,13 +758,12 @@ routes = [
 
 # --------------------------------------------------------------------------- caller check
 #
-# Apify's gateway checks the token before a request reaches this server. Code inside the container
-# does not go through the gateway: a pipeline's HTTP tool (say, an agent steered by a web page it read)
-# could call http://127.0.0.1:<port>/run or /engine directly and drive the engine with its key. So the
-# server checks the token itself too: it must belong to the account the run belongs to.
-
-VERIFIED_TTL = 600  # seconds a checked token is trusted before it is checked again
-MAX_VERIFIED = 64
+# Apify's gateway checks the token, removes it, and adds X-Apify-User-ID with the caller's account ID
+# before a request reaches this server. Code inside the container does not go through the gateway: a
+# pipeline's HTTP tool (say, an agent steered by a web page it read) could call
+# http://127.0.0.1:<port>/run or /engine directly and drive the engine with its key. So the server also
+# requires X-Apify-User-ID to be the account this run belongs to. Code in the container could still set
+# that header, but a web page steering an agent does not know the user's account ID.
 
 
 def verify_callers() -> bool:
@@ -776,61 +773,24 @@ def verify_callers() -> bool:
     return apify_env.is_at_home() and apify_env.is_standby()
 
 
-def caller_token(scope: dict) -> str | None:
-    headers = {k.decode('latin-1').lower(): v.decode('latin-1') for k, v in scope.get('headers', [])}
-    auth = headers.get('authorization', '').strip()
-    if auth:
-        return auth.split(None, 1)[1].strip() if auth.lower().startswith('bearer ') else auth
-    for k, v in parse_qsl(scope.get('query_string', b'').decode('latin-1')):
-        if k == 'token' and not v.startswith(ENGINE_TOKEN_PREFIXES):
-            return v
-    return None
-
-
-async def token_belongs_to_owner(token: str) -> bool | None:
-    """True if the token is valid and (when the API says whose it is) the run owner's; None if Apify can't say."""
-    key = hashlib.sha256(token.encode()).hexdigest()
-    now = time.time()
-    if S.verified.get(key, 0) > now:
-        return True
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(f'{apify_env.api_base()}/v2/users/me', headers={'Authorization': f'Bearer {token}'})
-    except httpx.HTTPError:
-        return None
-    if r.status_code in (401, 404):
-        return False
-    if r.status_code == 200:
-        owner = os.environ.get('APIFY_USER_ID')
-        user = (r.json().get('data') or {}).get('id')
-        if owner and user != owner:
-            return False
-    elif r.status_code != 403:  # 403: a real token scoped without account access, which is still a real token
-        return None
-    S.verified[key] = now + VERIFIED_TTL
-    while len(S.verified) > MAX_VERIFIED:
-        S.verified.pop(next(iter(S.verified)))
-    return True
-
-
 class CallerCheck:
     def __init__(self, inner):
         self.inner = inner
         self.enabled = verify_callers()
+        self.owner = os.environ.get('APIFY_USER_ID') or ''
+        if self.enabled and not self.owner:
+            log.warning('APIFY_USER_ID is not set, so requests cannot be matched to the account; not checking callers.')
+            self.enabled = False
 
     async def __call__(self, scope, receive, send):
         if not self.enabled or scope['type'] != 'http':
             return await self.inner(scope, receive, send)
-        if scope.get('path') == '/' and any(k.decode('latin-1').lower() == READINESS_HEADER for k, _ in scope.get('headers', [])):
+        headers = {k.decode('latin-1').lower(): v.decode('latin-1') for k, v in scope.get('headers', [])}
+        if scope.get('path') == '/' and READINESS_HEADER in headers:
             return await self.inner(scope, receive, send)  # the platform's probe, which only ever gets "OK"
-        token = caller_token(scope)
-        ok = await token_belongs_to_owner(token) if token else False
-        if ok:
+        if headers.get('x-apify-user-id', '').strip() == self.owner:
             return await self.inner(scope, receive, send)
-        if ok is None:
-            resp = JSONResponse({'error': 'Could not check the Apify token right now, retry shortly.'}, status_code=503)
-        else:
-            resp = JSONResponse({'error': 'A valid Apify token for this account is required.'}, status_code=401)
+        resp = JSONResponse({'error': 'Requests must come through the Apify gateway with a token for this account.'}, status_code=401)
         await resp(scope, receive, send)
 
 
