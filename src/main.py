@@ -663,8 +663,10 @@ async def self_test() -> int:
 def sample_png() -> bytes | None:
     """A small image with text, to pull OCR models at build time. Best effort."""
     try:
+        import importlib
         import io
 
+        importlib.invalidate_caches()  # Pillow may have been installed after this process started
         from PIL import Image, ImageDraw
 
         img = Image.new('RGB', (640, 160), 'white')
@@ -698,15 +700,15 @@ async def prebake() -> int:
     for name, params, payloads in jobs:
         pipeline = pipelines.build(name, params, S.env)
         for body, ctype, filename in payloads:
-            if body is None:
-                body = sample_png()
-                if body is None:
-                    log.warning('Prebake %s/%s skipped: could not render a sample image.', name, filename)
-                    continue
             ok = False
             for attempt in range(3):
                 try:
                     token = await warm_token(name, pipeline, refresh=attempt > 0)
+                    if body is None:  # render only once the pipeline has started and installed Pillow
+                        body = sample_png()
+                        if body is None:
+                            log.warning('Prebake %s/%s skipped: could not render a sample image.', name, filename)
+                            break
                     started = time.time()
                     result = await send_to_task(token, body, ctype, filename)
                     errors = object_errors(result)
