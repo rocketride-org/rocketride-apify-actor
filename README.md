@@ -30,6 +30,7 @@ Point Claude, Cursor, ChatGPT, n8n, LangChain or your own code at it and you get
 - [Quickstart](#quickstart)
 - [Connect your agent over MCP](#connect-your-agent-over-mcp)
 - [Call a pipeline over HTTP](#call-a-pipeline-over-http)
+- [Run your own pipeline](#run-your-own-pipeline)
 - [API reference](#api-reference)
 - [Input: bring your own model](#input-bring-your-own-model)
 - [Pricing and performance](#pricing-and-performance)
@@ -160,6 +161,27 @@ curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/agent" \
   -d '{"question": "What changed in the latest Python release? Check python.org and cite the page."}'
 ```
 
+## Run your own pipeline
+
+`POST /run` starts any `.pipe`, sends it one input, returns the output and stops it. Send what the pipeline's source expects:
+
+| Source | Send |
+| --- | --- |
+| `webhook` or `dropper` | `"text"`, or `"url"` for a file |
+| `chat` | `"question"`. Plain `"text"` is treated as the question |
+
+```bash
+curl -X POST "https://rocketrideai--rocketride.apify.actor/run" \
+  -H "Authorization: Bearer $APIFY_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"pipeline\": $(cat my-chat.pipe), \"question\": \"What is RocketRide?\"}"
+```
+
+The response has `answer`, `text` or `data`, depending on what the pipeline returns, plus the raw engine `result`. Node and model errors come back as HTTP 502. If the pipeline returns nothing, a `warning` says so, which usually means no response node is wired to the lane you expected.
+
+For a pipeline with several sources, such as a dropper for files and a chat for questions, name one with `"source": "chat_1"`. Without it, a question goes to the chat source and text or a URL to the other one.
+
+Keys in a pipeline stay as variables, such as `${ROCKETRIDE_ANTHROPIC_KEY}`, and are filled in from [your input](#input-bring-your-own-model). The examples in the [RocketRide repo](https://github.com/rocketride-org/rocketride-server/tree/develop/examples) run this way, as long as the services they call are reachable from Apify.
+
 ## API reference
 
 ### Endpoints
@@ -169,7 +191,7 @@ curl -X POST "https://rocketrideai--rocketride.apify.actor/pipelines/agent" \
 | `POST /pipelines/{name}` | Run a ready-made pipeline |
 | `GET /pipelines` | List pipelines, their options and your configured LLM providers |
 | `GET /pipelines/{name}` | Get the `.pipe` definition a request would run, to reuse or edit |
-| `POST /run` | Run any webhook-source `.pipe` once: `{"pipeline": {...}, "text": "..."}` |
+| `POST /run` | Run any `.pipe` once: `{"pipeline": {...}}` plus `text`, `url`, or `question` for chat pipelines |
 | `POST /mcp` | RocketRide MCP server (Streamable HTTP) |
 | `/engine/...` | Pass-through to the engine's native HTTP API |
 | `GET /health` | Engine status |
@@ -193,7 +215,7 @@ All input is optional. The document pipelines, and the MCP tools for building an
 Your server reads its input from a **task**, not from the Actor's own URL. To add a key:
 
 1. Open the Actor in Apify Console, fill in your key in the **Input** tab, and select **Save as a new task**.
-2. In the task's **Settings → Server** section, make sure the input is passed to the server.
+2. Keep the task's server settings as they are. If you do change them, check that the input is still passed to the server.
 3. Send requests to the task's URL instead, shown in its **Server** tab: `https://<username>--<task-name>.apify.actor`.
 
 The same task is where you change the server's memory and idle timeout.
@@ -256,6 +278,8 @@ Yes. The engine is [MIT-licensed on GitHub](https://github.com/rocketride-org/ro
 - **`send_files` reads from the container.** The MCP `send_files` tool and upload links read from the Actor's container, not your machine. To send your own files, use `send_data`, a pipeline endpoint, or `/run` with a URL.
 - **Out-of-memory failures.** If a pipeline runs out of memory, the request fails with a `hint` that explains why, and the pipeline restarts on the next request.
 - **Restarts clear running pipelines.** They live in the server's memory. Save results with `?save=true`.
+- **Outside services must be reachable.** Nodes that use a database, vector store or other service (Qdrant, Postgres, Slack, n8n and so on) need it reachable from Apify, with its credentials under **Other node credentials**. A service on your own machine's `localhost` is not reachable.
+- **Chat pipelines over MCP.** The MCP `run_pipeline` tool's `inputs` does not reach a `chat` source yet. Use `/run` with `question` for those.
 - **Extra nodes install on first use.** Nodes outside the ready-made pipelines install their dependencies the first time they run, so that run is slower.
 
 ## Development

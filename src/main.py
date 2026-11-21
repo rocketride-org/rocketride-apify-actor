@@ -311,6 +311,16 @@ def task_died(result: Any) -> str | None:
     return None
 
 
+OBJECT_METADATA = {'name', 'path', 'objectId', 'status', 'error', 'message'}
+
+
+def has_output(result: Any) -> bool:
+    """True if any object came back with something besides metadata (text, answers, audio, ...)."""
+    objects = result.get('objects') if isinstance(result, dict) else None
+    return any(isinstance(o, dict) and any(v for k, v in o.items() if k not in OBJECT_METADATA)
+               for o in (objects or {}).values())
+
+
 def answer_text(value: Any) -> str:
     if isinstance(value, dict):
         for k in ('answer', 'text', 'content'):
@@ -568,32 +578,89 @@ async def run_featured(request: Request) -> Response:
     return JSONResponse(out)
 
 
+def source_component(pipeline: dict, wants_question: bool = False) -> dict | None:
+    """The component a pipeline takes its input from: its "source" id, else its Source-mode component.
+
+    A pipeline can have several sources (say a dropper for files and a chat for questions); the engine
+    then needs one named, so pick the chat source for a question and the other one for text or a file.
+    """
+    comps = [c for c in pipeline.get('components') or [] if isinstance(c, dict)]
+    by_id = {c.get('id'): c for c in comps}
+    if pipeline.get('source') in by_id:
+        return by_id[pipeline['source']]
+    srcs = [c for c in comps if (c.get('config') or {}).get('mode') == 'Source']
+    if len(srcs) > 1:
+        preferred = [c for c in srcs if (c.get('provider') == 'chat') == wants_question]
+        return (preferred or srcs)[0]
+    return srcs[0] if srcs else None
+
+
+QUESTION_MIME = 'application/rocketride-question'
+
+
+def question_payload(question: Any) -> bytes:
+    """A chat question as the engine expects it: the SDK's Question JSON (a plain string, or a full Question object)."""
+    if isinstance(question, dict):
+        return json.dumps(question).encode()
+    return json.dumps({'type': 'question', 'questions': [{'text': str(question)}], 'expectJson': False}).encode()
+
+
+async def ask_task(project_id: str, source_id: str, payload: bytes) -> Any:
+    """Send a question to a running chat source. The path-addressed webhook routes it to that source."""
+    assert S.client
+    r = await S.client.post(f'/webhook/{project_id}/{source_id}', content=payload,
+                            headers=engine_headers({'Content-Type': QUESTION_MIME}))
+    return unwrap(r.json())
+
+
 async def run_adhoc(request: Request) -> Response:
-    """POST /run  {"pipeline": {...}, "text": "..."} or {"pipeline": {...}, "url": "..."}"""
+    """POST /run  {"pipeline": {...}} plus "text", "url" or (for chat pipelines) "question"."""
     if (resp := await ensure_ready()) is not None:
         return resp
     try:
         data = await request.json()
         pipeline = data.get('pipeline') if isinstance(data, dict) else None
         if not isinstance(pipeline, dict) or 'components' not in pipeline:
-            raise ValueError('Body must be JSON with a "pipeline" object (a .pipe file) plus "text" or "url".')
+            raise ValueError('Body must be JSON with a "pipeline" object (a .pipe file) plus "text", "url" or "question".')
         # The engine keys tasks by project_id, so a definition taken from GET /pipelines/{name} would clash
         # with that pipeline's warm task ("Pipeline is already running"). A one-shot run gets its own.
         pipeline = {**pipeline, 'project_id': str(uuid.uuid4())}
-        if data.get('text') is not None:
+        if data.get('source'):
+            pipeline['source'] = str(data['source'])
+        question = data.get('question')
+        source = source_component(pipeline, wants_question=question is not None) or {}
+        if question is None and source.get('provider') == 'chat' and data.get('text') is not None:
+            question = data['text']  # a chat source only reads questions, so plain text is the question
+        if source.get('id'):
+            pipeline['source'] = source['id']  # the engine refuses to start a multi-source pipeline without one
+        if question is not None:
+            if not source.get('id'):
+                raise ValueError('"question" needs a pipeline with a source component (for example "chat").')
+            body, ctype, filename = question_payload(question), QUESTION_MIME, None
+        elif data.get('text') is not None:
             body, ctype, filename = str(data['text']).encode(), 'text/plain', data.get('filename') or 'input.txt'
         elif data.get('url'):
             body, ctype, filename = await download(str(data['url']), data.get('filename'))
         else:
-            raise ValueError('Include "text" or "url" to send into the pipeline.')
+            raise ValueError('Include "text" or "url" (or "question" for a chat pipeline) to send into the pipeline.')
     except (ValueError, httpx.HTTPError) as e:
         return JSONResponse({'error': str(e)}, status_code=400)
 
     token = None
     try:
         token = await start_task(pipeline)
-        result = await send_to_task(token, body, ctype, filename)
-        return JSONResponse({'text': extract_text(result), 'result': result})
+        if ctype == QUESTION_MIME:
+            result = await ask_task(pipeline['project_id'], source['id'], body)
+        else:
+            result = await send_to_task(token, body, ctype, filename)
+        out = {'text': extract_text(result), **shape_output(result)}
+        errors = object_errors(result)
+        if errors:
+            return JSONResponse({'error': errors[0], **out, 'result': result}, status_code=502)
+        if not has_output(result):
+            out['warning'] = ('The pipeline returned no output. Check that a response node is wired to the lane you '
+                              'expect, and that the input matches the source (chat pipelines take "question").')
+        return JSONResponse({**out, 'result': result})
     except EngineError as e:
         return JSONResponse({'error': str(e), 'engine': e.payload}, status_code=502)
     except httpx.HTTPError as e:
@@ -601,6 +668,9 @@ async def run_adhoc(request: Request) -> Response:
     finally:
         if token:
             await stop_task(token)
+
+
+ENGINE_TOKEN_PREFIXES = ('tk_', 'pk_')
 
 
 async def proxy(request: Request) -> Response:
@@ -611,7 +681,8 @@ async def proxy(request: Request) -> Response:
     path = request.url.path
     if path.startswith('/engine'):
         path = path[len('/engine'):] or '/'
-    params = [(k, v) for k, v in request.query_params.multi_items() if k != 'token']  # drop the Apify token
+    # Drop the Apify token, but keep an engine task token (tk_/pk_), which engine calls like /webhook and /task need.
+    params = [(k, v) for k, v in request.query_params.multi_items() if k != 'token' or v.startswith(ENGINE_TOKEN_PREFIXES)]
     headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP and k.lower() != 'authorization'}
     headers = {k: v for k, v in headers.items() if not k.lower().startswith('x-apify-')}
     headers['Authorization'] = f'Bearer {S.engine_key}'
