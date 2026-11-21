@@ -27,6 +27,7 @@ env = dict(os.environ,
     ROCKETRIDE_ENGINE_CMD=f'{sys.executable} {ROOT}/tests/mock_engine.py', ROCKETRIDE_HOME=str(ROOT),
     APIFY_INPUT_SECRETS_PRIVATE_KEY_FILE=base64.b64encode(pem).decode(),
     APIFY_INPUT_SECRETS_PRIVATE_KEY_PASSPHRASE='pass',
+    ROCKETRIDE_VERIFY_CALLER='1', APIFY_API_BASE_URL='http://127.0.0.1:5599', APIFY_USER_ID='owner1',
     ACTOR_INPUT_JSON=json.dumps({'openaiApiKey': apify_encrypt('sk-test-123', priv.public_key()),
                                  'additionalEnv': {'ROCKETRIDE_APIKEY': 'hijack', 'ROCKETRIDE_QDRANT_HOST': 'q'}}))
 proc = subprocess.Popen([sys.executable, str(ROOT / 'src/main.py')], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -154,6 +155,24 @@ try:
     r = c.post('/mcp', json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}, headers={'Accept': 'application/json, text/event-stream'})
     check('MCP SSE stream proxied', r.headers['content-type'].startswith('text/event-stream') and 'tools/list' in r.text, r.text)
     check('engine passthrough', c.get('/engine/version').json()['version'] == 'mock-3.6.0')
+
+    # The server checks the Apify token itself, so code inside the container (a pipeline's HTTP tool)
+    # cannot skip Apify's gateway by calling this port directly.
+    raw = httpx.Client(base_url=base, timeout=30)
+    check('no token is a 401', raw.get('/pipelines').status_code == 401)
+    check('no token on /engine is a 401', raw.get('/engine/version').status_code == 401)
+    check('no token on /run is a 401', raw.post('/run', json={'pipeline': pipe, 'text': 'x'}).status_code == 401)
+    check('an invalid token is a 401', raw.get('/pipelines', headers={'Authorization': 'Bearer nope'}).status_code == 401)
+    check("another account's token is a 401", raw.get('/pipelines', headers={'Authorization': 'Bearer apify_api_OTHER'}).status_code == 401)
+    check('a scoped token is accepted', raw.get('/pipelines', headers={'Authorization': 'Bearer apify_api_SCOPED'}).status_code == 200)
+    check('the token works in ?token=', raw.get('/pipelines', params={'token': 'apify_api_FAKE'}).status_code == 200)
+    check('an engine task token alone is not an Apify token', raw.get('/engine/version', params={'token': 'tk_123'}).status_code == 401)
+    check('the readiness probe needs no token', raw.get('/', headers={'x-apify-container-server-readiness-probe': '1'}).text == 'OK')
+    for target in ['http://127.0.0.1:5599/version', 'http://localhost:4399/pipelines', 'http://169.254.169.254/', 'http://[::1]:4399/']:
+        r = c.post('/pipelines/doc-to-text', json={'url': target})
+        check(f'url to an internal address is refused: {target}', r.status_code == 400 and 'internal' in r.json().get('error', ''), r.text[:300])
+    r = c.post('/pipelines/ask', json={'text': 'd', 'question': ['a', 'b']})
+    check('a non-string question is a 400', r.status_code == 400 and 'string' in r.json().get('error', ''), r.text[:300])
 finally:
     proc.terminate()
     out = proc.communicate(timeout=10)[0]

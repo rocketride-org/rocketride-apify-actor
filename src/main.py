@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+import hashlib
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -29,6 +31,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import parse_qsl, urljoin, urlsplit
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -37,7 +40,7 @@ import httpx  # noqa: E402
 import uvicorn  # noqa: E402
 from starlette.applications import Starlette  # noqa: E402
 from starlette.background import BackgroundTask  # noqa: E402
-from starlette.requests import Request  # noqa: E402
+from starlette.requests import ClientDisconnect, Request  # noqa: E402
 from starlette.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse  # noqa: E402
 from starlette.routing import Route  # noqa: E402
 
@@ -80,6 +83,7 @@ class State:
     env: dict[str, str] = {}
     warm: 'OrderedDict[str, str]' = None  # cache key -> task token
     warm_lock: asyncio.Lock | None = None
+    verified: dict[str, float] = {}  # sha256 of a checked Apify token -> trusted until
     started_at = time.time()
 
 
@@ -376,8 +380,15 @@ def extract_text(result: Any) -> str | None:
     return '\n'.join(t.strip('\n') for t in texts).strip() if texts else None
 
 
+TEXT_PARAMS = ('question', 'instructions', 'provider', 'model')  # options that must be plain strings
+
+
 def _pick_params(source: Any) -> dict[str, Any]:
-    return {k: source[k] for k in pipelines.PARAM_NAMES if k in source and source[k] is not None}
+    picked = {k: source[k] for k in pipelines.PARAM_NAMES if k in source and source[k] is not None}
+    for k in TEXT_PARAMS:
+        if k in picked and not isinstance(picked[k], str):
+            raise ValueError(f'"{k}" must be a string.')
+    return picked
 
 
 async def read_request(request: Request, input_kind: str = 'document') -> tuple[bytes, str, str | None, dict[str, Any]]:
@@ -421,25 +432,56 @@ async def read_request(request: Request, input_kind: str = 'document') -> tuple[
                 return content, (value.content_type or 'application/octet-stream'), value.filename or filename, params
         raise ValueError('Multipart body has no file field.')
 
-    body = await request.body()
+    try:
+        body = await request.body()
+    except ClientDisconnect as e:  # a slow upload Apify's gateway gave up on (it allows 5 minutes per request)
+        raise ValueError('The upload was cut off before it finished.') from e
     if not body:
         raise ValueError('Empty request body. Send a file, or JSON {"text": ...} or {"url": ...}.')
     return body, ctype, filename, params
 
 
+MAX_REDIRECTS = 5
+
+
+async def check_public_url(url: str) -> None:
+    """Refuse URLs that point inside the container or Apify's network (loopback, private, link-local).
+
+    Without this, {"url": "http://127.0.0.1:<port>/engine/..."} reaches this server's own engine
+    passthrough, which adds the engine key, without going through Apify's token check.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ('http', 'https') or not parts.hostname:
+        raise ValueError('url must start with http:// or https:// and name a host')
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(parts.hostname, parts.port or (443 if parts.scheme == 'https' else 80))
+    except OSError as e:
+        raise ValueError(f'Cannot resolve {parts.hostname}: {e}') from e
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split('%', 1)[0])
+        if not ip.is_global:
+            raise ValueError(f'url points to a private or internal address ({ip}), which is not allowed.')
+
+
 async def download(url: str, filename: str | None) -> tuple[bytes, str, str | None]:
-    if not url.startswith(('http://', 'https://')):
-        raise ValueError('url must start with http:// or https://')
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
-        async with c.stream('GET', url) as r:
-            r.raise_for_status()
-            chunks, size = [], 0
-            async for chunk in r.aiter_bytes():
-                size += len(chunk)
-                if size > MAX_URL_BYTES:
-                    raise ValueError('Remote file is larger than 100 MB.')
-                chunks.append(chunk)
-            ctype = r.headers.get('content-type', '').split(';')[0].strip().lower()
+    async with httpx.AsyncClient(timeout=120, follow_redirects=False) as c:
+        for _ in range(MAX_REDIRECTS + 1):
+            await check_public_url(url)  # again on every redirect hop
+            async with c.stream('GET', url) as r:
+                if r.is_redirect and r.headers.get('location'):
+                    url = urljoin(url, r.headers['location'])
+                    continue
+                r.raise_for_status()
+                chunks, size = [], 0
+                async for chunk in r.aiter_bytes():
+                    size += len(chunk)
+                    if size > MAX_URL_BYTES:
+                        raise ValueError('Remote file is larger than 100 MB.')
+                    chunks.append(chunk)
+                ctype = r.headers.get('content-type', '').split(';')[0].strip().lower()
+                break
+        else:
+            raise ValueError(f'Too many redirects (more than {MAX_REDIRECTS}).')
     name = filename or (url.split('?')[0].rstrip('/').rsplit('/', 1)[-1] or 'download')
     if not ctype or ctype == 'application/octet-stream':
         ctype = mimetypes.guess_type(name)[0] or 'application/octet-stream'
@@ -715,7 +757,84 @@ routes = [
     Route('/engine', proxy, methods=ALL),
     Route('/engine/{rest:path}', proxy, methods=ALL),
 ]
-app = Starlette(routes=routes)
+
+# --------------------------------------------------------------------------- caller check
+#
+# Apify's gateway checks the token before a request reaches this server. Code inside the container
+# does not go through the gateway: a pipeline's HTTP tool (say, an agent steered by a web page it read)
+# could call http://127.0.0.1:<port>/run or /engine directly and drive the engine with its key. So the
+# server checks the token itself too: it must belong to the account the run belongs to.
+
+VERIFIED_TTL = 600  # seconds a checked token is trusted before it is checked again
+MAX_VERIFIED = 64
+
+
+def verify_callers() -> bool:
+    flag = os.environ.get('ROCKETRIDE_VERIFY_CALLER')
+    if flag is not None:
+        return flag == '1'
+    return apify_env.is_at_home() and apify_env.is_standby()
+
+
+def caller_token(scope: dict) -> str | None:
+    headers = {k.decode('latin-1').lower(): v.decode('latin-1') for k, v in scope.get('headers', [])}
+    auth = headers.get('authorization', '').strip()
+    if auth:
+        return auth.split(None, 1)[1].strip() if auth.lower().startswith('bearer ') else auth
+    for k, v in parse_qsl(scope.get('query_string', b'').decode('latin-1')):
+        if k == 'token' and not v.startswith(ENGINE_TOKEN_PREFIXES):
+            return v
+    return None
+
+
+async def token_belongs_to_owner(token: str) -> bool | None:
+    """True if the token is valid and (when the API says whose it is) the run owner's; None if Apify can't say."""
+    key = hashlib.sha256(token.encode()).hexdigest()
+    now = time.time()
+    if S.verified.get(key, 0) > now:
+        return True
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f'{apify_env.api_base()}/v2/users/me', headers={'Authorization': f'Bearer {token}'})
+    except httpx.HTTPError:
+        return None
+    if r.status_code in (401, 404):
+        return False
+    if r.status_code == 200:
+        owner = os.environ.get('APIFY_USER_ID')
+        user = (r.json().get('data') or {}).get('id')
+        if owner and user != owner:
+            return False
+    elif r.status_code != 403:  # 403: a real token scoped without account access, which is still a real token
+        return None
+    S.verified[key] = now + VERIFIED_TTL
+    while len(S.verified) > MAX_VERIFIED:
+        S.verified.pop(next(iter(S.verified)))
+    return True
+
+
+class CallerCheck:
+    def __init__(self, inner):
+        self.inner = inner
+        self.enabled = verify_callers()
+
+    async def __call__(self, scope, receive, send):
+        if not self.enabled or scope['type'] != 'http':
+            return await self.inner(scope, receive, send)
+        if scope.get('path') == '/' and any(k.decode('latin-1').lower() == READINESS_HEADER for k, _ in scope.get('headers', [])):
+            return await self.inner(scope, receive, send)  # the platform's probe, which only ever gets "OK"
+        token = caller_token(scope)
+        ok = await token_belongs_to_owner(token) if token else False
+        if ok:
+            return await self.inner(scope, receive, send)
+        if ok is None:
+            resp = JSONResponse({'error': 'Could not check the Apify token right now, retry shortly.'}, status_code=503)
+        else:
+            resp = JSONResponse({'error': 'A valid Apify token for this account is required.'}, status_code=401)
+        await resp(scope, receive, send)
+
+
+app = CallerCheck(Starlette(routes=routes))
 
 
 # --------------------------------------------------------------------------- entry points

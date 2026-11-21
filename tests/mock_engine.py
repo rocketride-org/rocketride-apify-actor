@@ -76,6 +76,15 @@ async def webhook(req):
         obj['text'] = [f"[{req.headers.get('content-type')}|{os.environ.get('ROCKETRIDE_OPENAI_KEY','-')}|{','.join(providers)}] {body}\n\n"]
     return JSONResponse({'status': 'OK', 'data': {'objectsRequested': 1, 'objectsCompleted': 1, 'objects': {'body': obj}}})
 
+async def apify_me(req):  # stands in for https://api.apify.com/v2/users/me
+    token = req.headers.get('authorization', '').removeprefix('Bearer ')
+    users = {'apify_api_FAKE': 'owner1', 'apify_api_OTHER': 'someone-else'}
+    if token == 'apify_api_SCOPED':
+        return JSONResponse({'error': {'type': 'insufficient-permissions'}}, 403)
+    if token not in users:
+        return JSONResponse({'error': {'type': 'token-not-valid'}}, 401)
+    return JSONResponse({'data': {'id': users[token]}})
+
 async def tasks(req):
     return JSONResponse({'count': len(TASKS), 'pipelines': [[c['provider'] for c in t['components']] for t in TASKS.values()]})
 
@@ -95,6 +104,6 @@ async def mcp(req):
 
 app = Starlette(routes=[Route('/version', version), Route('/task', task, methods=['POST', 'DELETE']),
     Route('/webhook', webhook, methods=['POST']), Route('/webhook/{project_id}/{source}', webhook, methods=['POST']),
-    Route('/_tasks', tasks), Route('/_kill', kill, methods=['POST']),
+    Route('/v2/users/me', apify_me), Route('/_tasks', tasks), Route('/_kill', kill, methods=['POST']),
     Route('/mcp', mcp, methods=['POST'])])
 uvicorn.run(app, host='127.0.0.1', port=int(os.environ.get('ROCKETRIDE_ENGINE_PORT', '5565')), log_level='warning')
