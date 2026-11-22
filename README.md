@@ -278,6 +278,8 @@ Yes. The engine is [MIT-licensed on GitHub](https://github.com/rocketride-org/ro
 - **`send_files` reads from the container.** The MCP `send_files` tool and upload links read from the Actor's container, not your machine. To send your own files, use `send_data`, a pipeline endpoint, or `/run` with a URL.
 - **Out-of-memory failures.** If a pipeline runs out of memory, the request fails with a `hint` that explains why, and the pipeline restarts on the next request.
 - **Restarts clear running pipelines.** They live in the server's memory. Save results with `?save=true`.
+- **5 minutes per request.** Apify ends a request that has no response within 5 minutes (HTTP 408), and returns HTTP 429 if no server is free within 2 minutes. Keep long agent runs and very large OCR jobs under that, and send big files by `url` rather than uploading them over a slow connection.
+- **Public URLs only.** `url` must point to a public address. Addresses inside the container or a private network are refused.
 - **Outside services must be reachable.** Nodes that use a database, vector store or other service (Qdrant, Postgres, Slack, n8n and so on) need it reachable from Apify, with its credentials under **Other node credentials**. A service on your own machine's `localhost` is not reachable.
 - **Chat pipelines over MCP.** The MCP `run_pipeline` tool's `inputs` does not reach a `chat` source yet. Use `/run` with `question` for those.
 - **Extra nodes install on first use.** Nodes outside the ready-made pipelines install their dependencies the first time they run, so that run is slower.
